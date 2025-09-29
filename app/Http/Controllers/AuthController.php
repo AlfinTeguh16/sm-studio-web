@@ -52,6 +52,39 @@ class AuthController extends Controller
                 'profile' => Profile::find($user->id),
             ], 201);
         }
+        public function registerMua(Request $request)
+        {
+            $data = $request->validate([
+                'name'     => ['required','string','max:100'],
+                'email'    => ['required','email','max:191', Rule::unique('users','email')],
+                'password' => ['required','string','min:6'],
+                'phone'    => ['nullable','string','max:30'],
+            ]);
+    
+            $user = new User([
+                'name'     => $data['name'],
+                'email'    => $data['email'],
+                'password' => Hash::make($data['password']),
+            ]);
+            $user->save();
+    
+            // Auto-create profile (role default mua)
+            Profile::create([
+                'id'        => $user->id,
+                'role'      => 'mua',
+                'name'      => $data['name'],
+                'phone'     => $data['phone'] ?? null,
+                'is_online' => true,
+            ]);
+    
+            $token = $user->createToken('api')->plainTextToken;
+    
+            return response()->json([
+                'token'   => $token,
+                'user'    => $user,
+                'profile' => Profile::find($user->id),
+            ], 201);
+        }
     
         /**
          * POST /auth/login

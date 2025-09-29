@@ -17,6 +17,7 @@ use App\Http\Controllers\{
 */
 Route::prefix('auth')->group(function () {
     Route::post('/register', [AuthController::class, 'register'])->middleware('throttle:20,1');
+    Route::post('/register-mua', [AuthController::class, 'registerMua'])->middleware('throttle:20,1');
     Route::post('/login',    [AuthController::class, 'login'])->middleware('throttle:30,1');
 });
 
