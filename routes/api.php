@@ -7,7 +7,8 @@ use App\Http\Controllers\{
     AvailabilityController,
     OfferingController,
     PortfolioController,
-    NotificationController
+    NotificationController,
+    MuaController
 };
 
 /*
@@ -37,7 +38,8 @@ Route::prefix('auth')->group(function () {
         Route::patch('/password',        [AuthController::class, 'changePassword']);      // { current_password, new_password, new_password_confirmation }
     });
 
-
+    Route::get(   '/mua-location',                [MuaController::class, 'getMuaLocation']);
+  
 
     // --- Availability ---
     Route::get(   '/availability',                [AvailabilityController::class, 'index']);     // ?muaId=&date=&date_from=&date_to=
