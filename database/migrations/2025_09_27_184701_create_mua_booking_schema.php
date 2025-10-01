@@ -87,17 +87,21 @@ return new class extends Migration
             $table->date('booking_date');
             $table->string('booking_time', 5); // 'HH:MM'
             $table->enum('service_type', ['home_service','studio']);
+            $table->string('location_address')->nullable(); // wajib jika service_type=home_service
+            $table->text('notes')->nullable();
+            $table->string('tax'); 
+            $table->string('total')->nullable();
             $table->enum('status', ['pending','confirmed','rejected','cancelled','completed'])->default('pending');
             $table->string('payment_method')->nullable();
             $table->decimal('amount', 12, 2)->nullable();
             $table->enum('payment_status', ['unpaid','paid','refunded'])->default('unpaid');
 
             // Placeholder Midtrans (tanpa integrasi dulu)
-            $table->string('payment_provider')->nullable()->default('midtrans');
-            $table->string('payment_reference')->nullable(); // order_id/transaction_id
-            $table->string('payment_token')->nullable();     // snap_token/redirect token
-            $table->json('payment_metadata')->nullable();    // payload raw
-            $table->timestamp('paid_at')->nullable();
+            // $table->string('payment_provider')->nullable()->default('midtrans');
+            // $table->string('payment_reference')->nullable(); // order_id/transaction_id
+            // $table->string('payment_token')->nullable();     // snap_token/redirect token
+            // $table->json('payment_metadata')->nullable();    // payload raw
+            // $table->timestamp('paid_at')->nullable();
 
             $table->timestamps();
 

@@ -89,6 +89,10 @@ class BookingController extends Controller
             'use_collaboration'=> ['nullable','boolean'],
             'selected_add_ons' => ['nullable','array'],
             'selected_add_ons.*' => ['string','max:100'],
+            'location_address' => ['required_if:service_type,home_service','nullable','string','max:500'],
+            'notes'           => ['nullable','string','max:1000'],
+            'tax'             => ['nullable','string','max:100'],
+            'total'           => ['nullable','string','max:100']
         ]);
 
         // Cek slot tersedia
