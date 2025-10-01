@@ -110,7 +110,6 @@ return new class extends Migration
 
             $table->index(['mua_id','booking_date']);
             $table->index(['customer_id']);
-            $table->index(['payment_reference']);
         });
 
         // Cegah double-booking aktif (pending|confirmed) pakai generated column + unique index
