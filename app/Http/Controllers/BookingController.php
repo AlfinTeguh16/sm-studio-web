@@ -8,6 +8,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Carbon\Carbon;
+use Illuminate\Validation\ValidationException;
 
 class BookingController extends Controller
 {
@@ -76,89 +77,131 @@ class BookingController extends Controller
      *  - amount? (number) → jika tidak dikirim & ada offering, amount = offering.price (+collab price jika dipilih)
      *  - use_collaboration? (bool), selected_add_ons? (array of string) → disimpan ke payment_metadata
      */
+
+// use App\Models\{Booking, Availability, Offering, Notification}; // sesuaikan namespace model
+
     public function store(Request $req)
     {
         $data = $req->validate([
-            'customer_id'      => ['required','uuid'],
-            'mua_id'           => ['required','uuid'],
-            'offering_id'      => ['nullable','integer','exists:offerings,id'],
-            'booking_date'     => ['required','date_format:Y-m-d'],
-            'booking_time'     => ['required','date_format:H:i'],
-            'service_type'     => ['required', Rule::in(['home_service','studio'])],
-            'amount'           => ['nullable','numeric'],
-            'use_collaboration'=> ['nullable','boolean'],
-            'selected_add_ons' => ['nullable','array'],
+            'customer_id'        => ['required','uuid'],
+            'mua_id'             => ['required','uuid'],
+            'offering_id'        => ['nullable','integer','exists:offerings,id'],
+            'booking_date'       => ['required','date_format:Y-m-d'],
+            'booking_time'       => ['required','date_format:H:i'],
+            'service_type'       => ['required', Rule::in(['home_service','studio'])],
+            'amount'             => ['nullable','numeric'],
+            'use_collaboration'  => ['nullable','boolean'],
+            'selected_add_ons'   => ['nullable','array'],
             'selected_add_ons.*' => ['string','max:100'],
-            'location_address' => ['required_if:service_type,home_service','nullable','string','max:500'],
-            'notes'           => ['nullable','string','max:1000'],
-            'tax'             => ['nullable','string','max:100'],
-            'total'           => ['nullable','string','max:100']
+            // Wajib hanya bila home_service; selain itu boleh null
+            'location_address'   => ['nullable','string','max:500','required_if:service_type,home_service'],
+            'notes'              => ['nullable','string','max:1000'],
+            // Anggap tax/total angka (bukan string) agar bisa dihitung
+            'tax'                => ['nullable','numeric'],
+            'total'              => ['nullable','numeric'],
         ]);
 
-        // Cek slot tersedia
-        $avail = Availability::where('mua_id', $data['mua_id'])
-            ->whereDate('available_date', $data['booking_date'])
-            ->first();
-
-        if (!$avail || !in_array($data['booking_time'], $avail->time_slots ?? [])) {
-            return response()->json(['error' => 'Slot tidak tersedia'], 422);
-        }
-
-        // Hitung amount jika tidak dikirim
-        $amount = $data['amount'] ?? null;
+        // Normalisasi flag & metadata
+        $useCollab   = (bool)($data['use_collaboration'] ?? false);
         $paymentMeta = [];
-
         if (!empty($data['selected_add_ons'])) {
-            $paymentMeta['selected_add_ons'] = $data['selected_add_ons'];
+            $paymentMeta['selected_add_ons'] = array_values($data['selected_add_ons']);
+        }
+        if (array_key_exists('use_collaboration', $data)) {
+            $paymentMeta['use_collaboration'] = $useCollab;
         }
 
-        if (isset($data['use_collaboration'])) {
-            $paymentMeta['use_collaboration'] = (bool)$data['use_collaboration'];
-        }
-
+        // Jika amount tidak dikirim, coba derive dari offering
+        $amount = $data['amount'] ?? null;
         if ($amount === null && !empty($data['offering_id'])) {
             $off = Offering::find($data['offering_id']);
             if ($off) {
-                $amount = (float)$off->price;
-                if (!empty($data['use_collaboration']) && $off->collaboration && $off->collaboration_price !== null) {
-                    $amount += (float)$off->collaboration_price;
+                $amount = (float) $off->price;
+                if ($useCollab && $off->collaboration && $off->collaboration_price !== null) {
+                    $amount += (float) $off->collaboration_price;
                 }
             }
         }
 
-        // Set status selalu pending saat dibuat
-        $payload = [
-            'customer_id'      => $data['customer_id'],
-            'mua_id'           => $data['mua_id'],
-            'offering_id'      => $data['offering_id'] ?? null,
-            'booking_date'     => $data['booking_date'],
-            'booking_time'     => $data['booking_time'],
-            'service_type'     => $data['service_type'],
-            'status'           => 'pending',
-            'amount'           => $amount,
-            'payment_status'   => 'unpaid',
-        ];
-        if (!empty($paymentMeta)) $payload['payment_metadata'] = $paymentMeta;
+        // Jika tetap null dan tidak ada offering, kembalikan error yang jelas
+        if ($amount === null) {
+            throw ValidationException::withMessages([
+                'amount' => 'Amount wajib diisi jika tidak memilih offering.',
+            ]);
+        }
 
-        // Simpan booking + notifikasi, handle race condition oleh unique index
+        // Hitung total jika belum dikirim (tax dianggap nilai absolut; sesuaikan jika %)
+        $tax   = isset($data['tax']) ? (float)$data['tax'] : 0.0;
+        $total = isset($data['total']) ? (float)$data['total'] : ($amount + $tax);
+
         try {
-            $booking = null;
-            DB::transaction(function () use (&$booking, $payload) {
+            $booking = DB::transaction(function () use ($data, $paymentMeta, $amount, $tax, $total) {
+
+                // Cek slot secara atomic (row-level lock)
+                $avail = Availability::where('mua_id', $data['mua_id'])
+                    ->whereDate('available_date', $data['booking_date'])
+                    ->lockForUpdate()
+                    ->first();
+
+                $timeSlots = $avail?->time_slots ?? []; // pastikan cast di model: protected $casts = ['time_slots' => 'array'];
+                if (!$avail || !in_array($data['booking_time'], $timeSlots, true)) {
+                    throw ValidationException::withMessages([
+                        'booking_time' => 'Slot tidak tersedia.',
+                    ]);
+                }
+
+                // Siapkan payload lengkap
+                $payload = [
+                    'customer_id'       => $data['customer_id'],
+                    'mua_id'            => $data['mua_id'],
+                    'offering_id'       => $data['offering_id'] ?? null,
+                    'booking_date'      => $data['booking_date'],
+                    'booking_time'      => $data['booking_time'],
+                    'service_type'      => $data['service_type'],
+                    'status'            => 'pending',   // selalu pending ketika dibuat
+                    'payment_status'    => 'unpaid',
+                    'amount'            => $amount,
+                    'tax'               => $tax,
+                    'total'             => $total,
+                    'location_address'  => $data['location_address'] ?? null,
+                    'notes'             => $data['notes'] ?? null,
+                    // pastikan di model Booking: protected $casts = ['payment_metadata' => 'array'];
+                    'payment_metadata'  => !empty($paymentMeta) ? $paymentMeta : null,
+                ];
+
+                // Buat booking — asumsikan ada unique index pada (mua_id, booking_date, booking_time)
                 $booking = Booking::create($payload);
+
+                // Notifikasi ke MUA
                 Notification::create([
-                    'user_id' => $payload['mua_id'],
+                    'user_id' => $data['mua_id'],
                     'title'   => 'Booking baru',
-                    'message' => 'Ada booking baru pada '.$payload['booking_date'].' '.$payload['booking_time'],
+                    'message' => 'Ada booking baru pada '.$data['booking_date'].' '.$data['booking_time'],
                     'type'    => 'booking',
                 ]);
+
+                return $booking;
             });
+        } catch (ValidationException $ve) {
+            // Balikkan 422 untuk error validasi/slot
+            return response()->json([
+                'message' => 'Validasi gagal.',
+                'errors'  => $ve->errors(),
+            ], 422);
         } catch (\Throwable $e) {
-            // kemungkinan bentrok unique index (double booking)
-            return response()->json(['error' => 'Slot sudah terisi'], 409);
+            // Jika ada unique constraint violation (SQLSTATE 23000), artinya double booking
+            $code = method_exists($e, 'getCode') ? (string)$e->getCode() : '';
+            if ($code === '23000') {
+                return response()->json(['error' => 'Slot sudah terisi'], 409);
+            }
+            // Log detail error untuk debugging
+            report($e);
+            return response()->json(['error' => 'Terjadi kesalahan, coba lagi.'], 500);
         }
 
         return response()->json($booking, 201);
     }
+
 
     /**
      * PATCH /bookings/{booking}/status
