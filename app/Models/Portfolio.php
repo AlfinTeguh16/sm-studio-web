@@ -10,13 +10,7 @@ class Portfolio extends Model
 {
     protected $table = 'portfolios';
 
-    protected $fillable = [
-        'mua_id',
-        'name',
-        'photos',
-        'makeup_type',
-        'collaboration',
-    ];
+    protected $fillable = ['mua_id','name','photos','makeup_type','collaboration'];
 
     protected $casts = [
         'photos'     => 'array',     // JSON -> array otomatis

@@ -55,16 +55,13 @@ Route::prefix('auth')->group(function () {
 
 
     // --- Bookings ---
-    Route::get(   '/bookings',                    [BookingController::class, 'index']);          // ?role=&userId=&status=&date_from=&date_to=
-    Route::get(   '/bookings/{booking}',          [BookingController::class, 'show']);
-    Route::post(  '/bookings',                    [BookingController::class, 'store']);
-    Route::patch( '/bookings/{booking}/status',   [BookingController::class, 'updateStatus']);   // { status, reason? }
-    Route::patch( '/bookings/{booking}/reschedule',[BookingController::class, 'reschedule']);    // { booking_date, booking_time, reason? }
-    Route::post(  '/bookings/quote',              [BookingController::class, 'quote']);          // { offering_id, use_collaboration? }
-    Route::get(   '/bookings/calendar',           [BookingController::class, 'calendar']);       // ?date_from=&date_to=
-    Route::get(   '/bookings/stats',              [BookingController::class, 'stats']);          // ?date_from=&date_to=
-
-
+    Route::get('bookings', [BookingController::class, 'index']);
+    Route::post('bookings', [BookingController::class, 'store']);
+    Route::get('bookings/{booking}', [BookingController::class, 'show']);
+    Route::put('bookings/{booking}', [BookingController::class, 'update']);
+    
+    Route::post('bookings/{booking}/in-progress', [BookingController::class, 'markInProgress']);
+    Route::post('bookings/{booking}/complete',    [BookingController::class, 'markComplete']);
     
     // --- Offerings ---
     // LISTING & DETAIL
