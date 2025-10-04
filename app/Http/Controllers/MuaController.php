@@ -19,4 +19,13 @@ class MuaController extends Controller
 
         return response()->json(['message' => 'success', 'data' => $location], 200);
     }
+
+    public function getMuaProfile(Request $req, $muaId)
+    {
+        $profile = Profile::find($muaId);
+        if (!$profile) {
+            return response()->json(['message' => 'MUA not found'], 404);
+        }
+        return response()->json(['message' => 'success', 'data' => $profile], 200);
+    }
 }
