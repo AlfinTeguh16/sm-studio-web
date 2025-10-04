@@ -16,11 +16,11 @@ use App\Http\Controllers\{
 | Public (no auth)
 |--------------------------------------------------------------------------
 */
-// Route::prefix('auth')->group(function () {
+Route::prefix('auth')->group(function () {
     Route::post('/register', [AuthController::class, 'register'])->middleware('throttle:20,1');
     Route::post('/register-mua', [AuthController::class, 'registerMua'])->middleware('throttle:20,1');
     Route::post('/login',    [AuthController::class, 'login'])->middleware('throttle:30,1');
-// });
+});
 
 /*
 |--------------------------------------------------------------------------
@@ -37,7 +37,9 @@ use App\Http\Controllers\{
         Route::patch('/profile/online',  [AuthController::class, 'toggleOnline']);        // { is_online: boolean }
         Route::patch('/password',        [AuthController::class, 'changePassword']);      // { current_password, new_password, new_password_confirmation }
     });
-
+    
+    // --- MUA ---
+    Route::get('/mua/{muaId}', [MuaController::class, 'getMuaProfile']);
     Route::get(   '/mua-location',                [MuaController::class, 'getMuaLocation']);
   
 
@@ -120,8 +122,7 @@ use App\Http\Controllers\{
     Route::delete('/notifications/{notification}', [NotificationController::class, 'destroy']);
     Route::delete('/notifications',             [NotificationController::class, 'destroyAll']); // mass delete (default: only read)
 
-    // --- MUA ---
-    Route::get('/mua/{muaId}', [MuaController::class, 'getMuaProfile']);
+   
 
 // });
 
