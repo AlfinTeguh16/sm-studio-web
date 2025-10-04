@@ -14,7 +14,6 @@ class OfferingController extends Controller
      * Query (opsional):
      * - muaId=uuid
      * - makeup_type=string
-     * - person_min, person_max
      * - price_min, price_max
      * - date_from, date_to (Y-m-d)
      * - has_collaboration=true|false
@@ -42,9 +41,6 @@ class OfferingController extends Controller
 
         if ($req->filled('price_min'))   $q->where('price', '>=', (float)$req->query('price_min'));
         if ($req->filled('price_max'))   $q->where('price', '<=', (float)$req->query('price_max'));
-
-        if ($req->filled('date_from'))   $q->whereDate('date', '>=', $req->query('date_from'));
-        if ($req->filled('date_to'))     $q->whereDate('date', '<=', $req->query('date_to'));
 
         if ($req->has('has_collaboration')) {
             $flag = filter_var($req->query('has_collaboration'), FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
@@ -93,7 +89,6 @@ class OfferingController extends Controller
      *  - person? (int >=1)
      *  - collaboration? (string|null) + collaboration_price? (numeric|null)
      *  - add_ons? (string[])         // bebas
-     *  - date? (Y-m-d)
      *  - price (numeric)
      */
     public function store(Request $req)
@@ -104,12 +99,10 @@ class OfferingController extends Controller
             'offer_pictures'      => ['nullable','array'],
             'offer_pictures.*'    => ['string','max:1000'],
             'makeup_type'         => ['nullable','string','max:100'],
-            'person'              => ['nullable','integer','min:1'],
             'collaboration'       => ['nullable','string','max:255'],
             'collaboration_price' => ['nullable','numeric','min:0'],
             'add_ons'             => ['nullable','array'],
             'add_ons.*'           => ['string','max:100'],
-            'date'                => ['nullable','date_format:Y-m-d'],
             'price'               => ['required','numeric','min:0'],
         ]);
 
@@ -146,12 +139,10 @@ class OfferingController extends Controller
             'offer_pictures'      => ['sometimes','array'],
             'offer_pictures.*'    => ['string','max:1000'],
             'makeup_type'         => ['sometimes','nullable','string','max:100'],
-            'person'              => ['sometimes','integer','min:1'],
             'collaboration'       => ['sometimes','nullable','string','max:255'],
             'collaboration_price' => ['sometimes','nullable','numeric','min:0'],
             'add_ons'             => ['sometimes','array'],
             'add_ons.*'           => ['string','max:100'],
-            'date'                => ['sometimes','nullable','date_format:Y-m-d'],
             'price'               => ['sometimes','numeric','min:0'],
         ]);
 
@@ -268,12 +259,10 @@ class OfferingController extends Controller
             'items.*.offer_pictures'      => ['nullable','array'],
             'items.*.offer_pictures.*'    => ['string','max:1000'],
             'items.*.makeup_type'         => ['nullable','string','max:100'],
-            'items.*.person'              => ['nullable','integer','min:1'],
             'items.*.collaboration'       => ['nullable','string','max:255'],
             'items.*.collaboration_price' => ['nullable','numeric','min:0'],
             'items.*.add_ons'             => ['nullable','array'],
             'items.*.add_ons.*'           => ['string','max:100'],
-            'items.*.date'                => ['nullable','date_format:Y-m-d'],
             'items.*.price'               => ['required','numeric','min:0'],
         ]);
 

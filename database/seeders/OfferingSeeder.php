@@ -33,11 +33,9 @@ class OfferingSeeder extends Seeder
                         'https://picsum.photos/seed/'.Str::random(6).'/800/1000',
                     ],
                     'makeup_type'         => $faker->randomElement($makeups),
-                    'person'              => rand(1,3),
                     'collaboration'       => $collab,
                     'collaboration_price' => $collabPrice,
                     'add_ons'             => collect($addons)->shuffle()->take(rand(0,3))->values()->all(),
-                    'date'                => (rand(0,1) ? now()->addDays(rand(3,30))->toDateString() : null),
                     'price'               => $faker->numberBetween(250000, 3500000),
                 ]);
             }

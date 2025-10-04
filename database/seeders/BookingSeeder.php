@@ -55,21 +55,6 @@ class BookingSeeder extends Seeder
                 ],
             ]);
 
-            // ========== AVAILABILITY ==========
-            DB::table('availability')->insert([
-                [
-                    'mua_id' => $muaA,
-                    'available_date' => Carbon::now()->addDay()->toDateString(),
-                    'time_slots' => json_encode(['09:00','11:00','13:00']),
-                    'created_at' => now(), 'updated_at' => now(),
-                ],
-                [
-                    'mua_id' => $muaB,
-                    'available_date' => Carbon::now()->addDays(2)->toDateString(),
-                    'time_slots' => json_encode(['10:00','14:00']),
-                    'created_at' => now(), 'updated_at' => now(),
-                ],
-            ]);
 
             // ========== OFFERINGS ==========
             $offer1 = DB::table('offerings')->insertGetId([
@@ -84,7 +69,6 @@ class BookingSeeder extends Seeder
                     ['name' => 'Extra Hour', 'price' => 75000],
                     ['name' => 'Premium Tools', 'price' => 50000],
                 ]),
-                'date' => null,
                 'price' => 350000,
                 'created_at' => now(), 'updated_at' => now(),
             ]);
@@ -100,7 +84,6 @@ class BookingSeeder extends Seeder
                 'add_ons' => json_encode([
                     ['name' => 'Lashes', 'price' => 30000],
                 ]),
-                'date' => null,
                 'price' => 250000,
                 'created_at' => now(), 'updated_at' => now(),
             ]);
@@ -114,7 +97,6 @@ class BookingSeeder extends Seeder
                 'collaboration' => null,
                 'collaboration_price' => null,
                 'add_ons' => json_encode([]),
-                'date' => null,
                 'price' => 400000,
                 'created_at' => now(), 'updated_at' => now(),
             ]);

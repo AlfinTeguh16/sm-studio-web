@@ -12,7 +12,6 @@ class DatabaseSeeder extends Seeder
             UserSeeder::class,
             OfferingSeeder::class,
             PortfolioSeeder::class,
-            AvailabilitySeeder::class,
             BookingSeeder::class,
             ReviewSeeder::class,
             NotificationSeeder::class,

@@ -4,7 +4,6 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\{
     BookingController,
-    AvailabilityController,
     OfferingController,
     PortfolioController,
     NotificationController,
@@ -41,18 +40,6 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/mua/{muaId}', [MuaController::class, 'getMuaProfile']);
     Route::get(   '/mua-location',                [MuaController::class, 'getMuaLocation']);
   
-
-    // --- Availability ---
-    Route::get(   '/availability',                [AvailabilityController::class, 'index']);     // ?muaId=&date=&date_from=&date_to=
-    Route::get(   '/availability/free',           [AvailabilityController::class, 'free']);      // slot available (exclude booked)
-    Route::get(   '/availability/check',          [AvailabilityController::class, 'check']);     // ?muaId=&date=&time=
-    Route::post(  '/availability',                [AvailabilityController::class, 'upsert']);    // upsert 1 hari
-    Route::patch( '/availability/slots/add',      [AvailabilityController::class, 'addSlot']);   // tambah slot
-    Route::patch( '/availability/slots/remove',   [AvailabilityController::class, 'removeSlot']);//
-    Route::delete('/availability/day',            [AvailabilityController::class, 'deleteDay']); // ?muaId=&date=
-    Route::post(  '/availability/bulk',           [AvailabilityController::class, 'bulkUpsert']);//
-    Route::post(  '/availability/recurring',      [AvailabilityController::class, 'recurring']); //
-
 
 
     // --- Bookings ---

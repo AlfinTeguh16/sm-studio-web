@@ -33,17 +33,7 @@ return new class extends Migration
         /**
          * AVAILABILITY — ketersediaan MUA per tanggal & jam
          */
-        Schema::create('availability', function (Blueprint $table) {
-            $table->id();
-            $table->uuid('mua_id');
-            $table->date('available_date');
-            $table->json('time_slots'); // contoh: ["08:00","09:30","13:00"]
-            $table->timestamps();
-
-            $table->unique(['mua_id','available_date']);
-            $table->foreign('mua_id')->references('id')->on('profiles')->onDelete('cascade');
-            $table->index('available_date');
-        });
+      
 
         /**
          * OFFERINGS — layanan/paket yang dipublish MUA
@@ -58,7 +48,6 @@ return new class extends Migration
             $table->string('collaboration')->nullable();   // nama partner/brand (boleh null)
             $table->decimal('collaboration_price', 12, 2)->nullable(); // wajib isi jika collaboration ada
             $table->json('add_ons')->nullable();           // array string/obj
-            $table->date('date')->nullable();              // opsional
             $table->decimal('price', 12, 2);
             $table->timestamps();
 
@@ -221,7 +210,6 @@ return new class extends Migration
         }
         Schema::dropIfExists('offerings');
 
-        Schema::dropIfExists('availability');
         Schema::dropIfExists('profiles');
     }
 
