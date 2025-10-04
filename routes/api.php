@@ -37,8 +37,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::patch('/profile/online',  [AuthController::class, 'toggleOnline']);        // { is_online: boolean }
         Route::patch('/password',        [AuthController::class, 'changePassword']);      // { current_password, new_password, new_password_confirmation }
     });
-
-    // --- MUA ---
+ // --- MUA ---
     Route::get('/mua/{muaId}', [MuaController::class, 'getMuaProfile']);
     Route::get(   '/mua-location',                [MuaController::class, 'getMuaLocation']);
   

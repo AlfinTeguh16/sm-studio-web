@@ -9,6 +9,8 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\Rule;
 use Illuminate\Support\Facades\Auth;
 use Laravel\Sanctum\PersonalAccessToken;
+use Illuminate\Support\Facades\DB;
+
 
 
 class AuthController extends Controller
@@ -155,8 +157,150 @@ class AuthController extends Controller
          */
         public function me(Request $request)
         {
-            $user = $request->user()->load('profile');
-            return response()->json($user);
+            $uid = $request->user()->id; // diasumsikan pakai Sanctum & guard ke profiles
+
+            // parse query: ?with=offerings,portfolios,bookingsAsMua,bookingsAsCustomer,notifications&limit=50
+            $with  = collect(explode(',', (string) $request->query('with', '')))
+                        ->map(fn($s) => trim($s))
+                        ->filter();
+            $limit = (int) $request->query('limit', 50);
+            $limit = max(1, min(200, $limit));
+
+            // 1) Ambil profil (raw)
+            $profile = DB::selectOne(
+                'SELECT id, role, name, phone, bio, photo_url, services, location_lat, location_lng, address, is_online, created_at, updated_at
+                FROM profiles WHERE id = ? LIMIT 1',
+                [$uid]
+            );
+            if (!$profile) {
+                return response()->json(['message' => 'Profile not found'], 404);
+            }
+
+            // decode JSON services → array
+            $services = null;
+            if (!empty($profile->services)) {
+                $decoded = json_decode($profile->services, true);
+                $services = is_array($decoded) ? $decoded : null;
+            }
+
+            // 2) Hitungan cepat (1 query, subselect)
+            $counts = DB::selectOne(
+                'SELECT
+                    (SELECT COUNT(*) FROM offerings    o WHERE o.mua_id      = ?) AS offerings,
+                    (SELECT COUNT(*) FROM portfolios   p WHERE p.mua_id      = ?) AS portfolios,
+                    (SELECT COUNT(*) FROM bookings     b WHERE b.mua_id      = ?) AS bookings_as_mua,
+                    (SELECT COUNT(*) FROM bookings     b WHERE b.customer_id = ?) AS bookings_as_customer,
+                    (SELECT COUNT(*) FROM notifications n WHERE n.user_id = ? AND n.is_read = 0) AS notifications_unread',
+                [$uid, $uid, $uid, $uid, $uid]
+            );
+
+            // 3) Relasi opsional via ?with=
+            $relations = [];
+
+            if ($with->contains('offerings')) {
+                $relations['offerings'] = DB::select(
+                    'SELECT id, mua_id, name_offer, offer_pictures, makeup_type, person, collaboration, collaboration_price, add_ons, date, price, created_at, updated_at
+                    FROM offerings WHERE mua_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT '.$limit,
+                    [$uid]
+                );
+            }
+
+            if ($with->contains('portfolios')) {
+                $relations['portfolios'] = DB::select(
+                    'SELECT id, mua_id, name, photos, makeup_type, collaboration, created_at, updated_at
+                    FROM portfolios WHERE mua_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT '.$limit,
+                    [$uid]
+                );
+            }
+
+            if ($with->contains('bookingsAsMua')) {
+                $relations['bookingsAsMua'] = DB::select(
+                    'SELECT id, customer_id, mua_id, offering_id, booking_date, booking_time, service_type,
+                            location_address, notes, tax, total, status, payment_method, amount, payment_status,
+                            invoice_number, invoice_date, due_date, selected_add_ons, discount_amount, tax_amount, subtotal, grand_total,
+                            created_at, updated_at
+                    FROM bookings WHERE mua_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT '.$limit,
+                    [$uid]
+                );
+            }
+
+            if ($with->contains('bookingsAsCustomer')) {
+                $relations['bookingsAsCustomer'] = DB::select(
+                    'SELECT id, customer_id, mua_id, offering_id, booking_date, booking_time, service_type,
+                            location_address, notes, tax, total, status, payment_method, amount, payment_status,
+                            invoice_number, invoice_date, due_date, selected_add_ons, discount_amount, tax_amount, subtotal, grand_total,
+                            created_at, updated_at
+                    FROM bookings WHERE customer_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT '.$limit,
+                    [$uid]
+                );
+            }
+
+            if ($with->contains('notifications')) {
+                $relations['notifications'] = DB::select(
+                    'SELECT id, user_id, title, message, type, is_read, created_at, updated_at
+                    FROM notifications WHERE user_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT '.$limit,
+                    [$uid]
+                );
+            }
+
+            // 4) Bentuk response (backward compatible: sediakan juga key "profile")
+            $payload = [
+                // field profil langsung
+                'id'            => $profile->id,
+                'role'          => $profile->role,
+                'name'          => $profile->name,
+                'phone'         => $profile->phone,
+                'bio'           => $profile->bio,
+                'photo_url'     => $profile->photo_url,
+                'services'      => $services,
+                'location_lat'  => $profile->location_lat,
+                'location_lng'  => $profile->location_lng,
+                'address'       => $profile->address,
+                'is_online'     => (bool) $profile->is_online,
+                'created_at'    => $profile->created_at,
+                'updated_at'    => $profile->updated_at,
+
+                // ringkasan
+                'counts'        => [
+                    'offerings'             => (int) ($counts->offerings ?? 0),
+                    'portfolios'            => (int) ($counts->portfolios ?? 0),
+                    'bookings_as_mua'       => (int) ($counts->bookings_as_mua ?? 0),
+                    'bookings_as_customer'  => (int) ($counts->bookings_as_customer ?? 0),
+                    'notifications_unread'  => (int) ($counts->notifications_unread ?? 0),
+                ],
+
+                // kompatibilitas klien lama: me.profile.id
+                'profile'       => [
+                    'id'            => $profile->id,
+                    'role'          => $profile->role,
+                    'name'          => $profile->name,
+                    'phone'         => $profile->phone,
+                    'bio'           => $profile->bio,
+                    'photo_url'     => $profile->photo_url,
+                    'services'      => $services,
+                    'location_lat'  => $profile->location_lat,
+                    'location_lng'  => $profile->location_lng,
+                    'address'       => $profile->address,
+                    'is_online'     => (bool) $profile->is_online,
+                    'created_at'    => $profile->created_at,
+                    'updated_at'    => $profile->updated_at,
+                ],
+
+                // relasi yang diminta
+                'relations'     => (object) $relations,
+            ];
+
+            return response()->json($payload);
         }
     
         /**
