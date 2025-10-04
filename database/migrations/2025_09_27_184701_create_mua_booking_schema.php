@@ -80,6 +80,8 @@ return new class extends Migration
             $table->date('booking_date');
             $table->string('booking_time', 5); // 'HH:MM'
             $table->enum('service_type', ['home_service','studio']);
+            
+            $table->integer('person')->default(1); // jumlah orang (>=1)
 
             // Detail lokasi & catatan
             $table->string('location_address')->nullable(); // wajib di FE jika service_type=home_service

@@ -39,6 +39,7 @@ class BookingController extends Controller
             'offering_id'      => ['nullable','integer','exists:offerings,id'],
             'booking_date'     => ['required','date_format:Y-m-d'],
             'booking_time'     => ['required','date_format:H:i'],
+            'person'           => ['required','integer','min:1'],
             'service_type'     => ['required', Rule::in(['home_service','studio'])],
             'location_address' => ['nullable','string','max:500'],
             'notes'            => ['nullable','string','max:1000'],

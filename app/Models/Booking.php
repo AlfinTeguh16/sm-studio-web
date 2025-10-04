@@ -15,7 +15,7 @@ class Booking extends Model
 
     protected $fillable = [
         'customer_id','mua_id','offering_id',
-        'booking_date','booking_time','service_type','location_address','notes',
+        'booking_date','booking_time','person' ,'service_type','location_address','notes',
         'invoice_number','invoice_date','due_date',
         'amount','selected_add_ons','subtotal','tax_amount','discount_amount','grand_total',
         'tax','total',

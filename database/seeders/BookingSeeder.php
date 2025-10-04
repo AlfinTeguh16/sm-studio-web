@@ -62,7 +62,6 @@ class BookingSeeder extends Seeder
                 'name_offer' => 'Wedding Natural',
                 'offer_pictures' => json_encode([]),
                 'makeup_type' => 'wedding',
-                'person' => 1,
                 'collaboration' => null,
                 'collaboration_price' => null,
                 'add_ons' => json_encode([
@@ -78,7 +77,6 @@ class BookingSeeder extends Seeder
                 'name_offer' => 'Party Glam',
                 'offer_pictures' => json_encode([]),
                 'makeup_type' => 'party',
-                'person' => 1,
                 'collaboration' => null,
                 'collaboration_price' => null,
                 'add_ons' => json_encode([
@@ -93,7 +91,6 @@ class BookingSeeder extends Seeder
                 'name_offer' => 'Editorial Shoot',
                 'offer_pictures' => json_encode([]),
                 'makeup_type' => 'editorial',
-                'person' => 1,
                 'collaboration' => null,
                 'collaboration_price' => null,
                 'add_ons' => json_encode([]),
@@ -109,6 +106,7 @@ class BookingSeeder extends Seeder
             $b1->setAttribute('offering_id', $offer1);
             $b1->setAttribute('booking_date', Carbon::now()->addDay());     // besok
             $b1->setAttribute('booking_time', '11:00');
+            $b1->setAttribute('person', 2);
             $b1->setAttribute('service_type', 'home_service');
             $b1->setAttribute('location_address', 'Jl. Mawar No.10, Denpasar');
             $b1->setAttribute('notes', 'Datang 15 menit lebih awal');
@@ -133,6 +131,7 @@ class BookingSeeder extends Seeder
             $b2->setAttribute('offering_id', $offer2);
             $b2->setAttribute('booking_date', Carbon::now()->addDays(2));
             $b2->setAttribute('booking_time', '10:00');
+            $b2->setAttribute('person', 2);
             $b2->setAttribute('service_type', 'studio');
             $b2->setAttribute('location_address', 'Studio A, Denpasar');
             $b2->setAttribute('notes', null);
@@ -155,6 +154,7 @@ class BookingSeeder extends Seeder
             $b3->setAttribute('offering_id', $offer3);
             $b3->setAttribute('booking_date', Carbon::now()->subDay()); // kemarin (sudah selesai)
             $b3->setAttribute('booking_time', '14:00');
+            $b3->setAttribute('person', 2);
             $b3->setAttribute('service_type', 'studio');
             $b3->setAttribute('location_address', 'Studio B, Ubud');
             $b3->setAttribute('notes', 'Background putih');
