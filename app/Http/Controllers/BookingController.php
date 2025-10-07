@@ -219,4 +219,47 @@ class BookingController extends Controller
             'data'    => $booking
         ]);
     }
+
+    public function getUserBookings(Request $request, string $userId)
+    {
+        $auth = $request->user();
+        if (!$auth) {
+            return response()->json(['message' => 'Unauthenticated'], 401);
+        }
+        // Hanya boleh akses milik sendiri
+        if ((string) $auth->id !== (string) $userId) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+    
+        $perPage = min((int) $request->query('per_page', 10), 100);
+        $status  = $request->query('status');
+
+    
+        $q = DB::table('bookings as b')
+            ->join('profiles as mp', 'mp.id', '=', 'b.mua_id')
+            ->leftJoin('offerings as o', 'o.id', '=', 'b.offering_id')
+            ->where('b.customer_id', $userId)
+            ->select([
+                'b.id',
+                'b.booking_date',
+                'b.booking_time',
+                'b.status',
+                'b.payment_status',
+                'b.grand_total',
+                'b.invoice_number',
+                'o.name_offer',
+                'o.price as offering_price',
+                'mp.name as mua_name',
+                'mp.photo_url as mua_photo',
+            ])
+            ->orderByDesc('b.created_at');
+    
+        if ($status) {
+            $statuses = is_array($status) ? $status : array_map('trim', explode(',', $status));
+            $q->whereIn('b.status', $statuses);
+        }
+
+    
+        return response()->json($q->paginate($perPage));
+    }
 }

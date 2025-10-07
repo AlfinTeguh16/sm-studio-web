@@ -16,9 +16,9 @@ use App\Http\Controllers\{
 |--------------------------------------------------------------------------
 */
 Route::prefix('auth')->group(function () {
+    Route::post('/login',    [AuthController::class, 'login'])->middleware('throttle:30,1');
     Route::post('/register', [AuthController::class, 'register'])->middleware('throttle:20,1');
     Route::post('/register-mua', [AuthController::class, 'registerMua'])->middleware('throttle:20,1');
-    Route::post('/login',    [AuthController::class, 'login'])->middleware('throttle:30,1');
 });
 
 /*
@@ -26,7 +26,7 @@ Route::prefix('auth')->group(function () {
 | Protected (Sanctum)
 |--------------------------------------------------------------------------
 */
-Route::middleware('auth:sanctum')->group(function () {
+// Route::middleware('auth:sanctum')->group(function () {
 
     // --- Auth / Profile ---
     Route::prefix('auth')->group(function () {
@@ -34,7 +34,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/logout',           [AuthController::class, 'logout']);              // ?all=true untuk revoke semua token
         Route::match(['put','patch'], '/profile',        [AuthController::class, 'updateProfile']);
         Route::patch('/profile/online',  [AuthController::class, 'toggleOnline']);        // { is_online: boolean }
-        Route::patch('/password',        [AuthController::class, 'changePassword']);      // { current_password, new_password, new_password_confirmation }
+        Route::patch('/profile',        [AuthController::class, 'changeProfile']);      // { current_password, new_password, new_password_confirmation }
     });
  // --- MUA ---
     Route::get('/mua/{muaId}', [MuaController::class, 'getMuaProfile']);
@@ -44,6 +44,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // --- Bookings ---
     Route::get('bookings', [BookingController::class, 'index']);
+    Route::get('users/{user}/bookings', [BookingController::class, 'getUserBookings']);
     Route::post('bookings', [BookingController::class, 'store']);
     Route::get('bookings/{booking}', [BookingController::class, 'show']);
     Route::put('bookings/{booking}', [BookingController::class, 'update']);
@@ -110,7 +111,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
    
 
-});
+// });
 
 /*
 |--------------------------------------------------------------------------

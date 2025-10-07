@@ -14,7 +14,7 @@ class Profile extends Model {
     'services' => 'array',
     'is_online' => 'boolean',
     ];
-    public function availability(): HasMany { return $this->hasMany(Availability::class, 'mua_id'); }
+
     public function offerings(): HasMany { return $this->hasMany(Offering::class, 'mua_id'); }
     public function portfolios(): HasMany { return $this->hasMany(Portfolio::class, 'mua_id'); }
 }
