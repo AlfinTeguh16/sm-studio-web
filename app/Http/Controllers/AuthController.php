@@ -374,7 +374,7 @@ class AuthController extends Controller
             'location_lng'  => ['nullable','numeric','between:-180,180'],
 
             // file optional; nama field "photo"
-            'photo'         => ['nullable', FileRule::image()->types(['jpg','jpeg','png','webp','heic'])->max(2 * 1024)],
+            'photo_url'         => ['nullable', FileRule::image()->types(['jpg','jpeg','png','webp','heic'])->max(2 * 1024)],
         ]);
 
         // Sinkron nama di tabel users
@@ -401,7 +401,7 @@ class AuthController extends Controller
         }
 
         // Handle upload foto (optional)
-        if ($request->hasFile('photo')) {
+        if ($request->hasFile('photo_url')) {
             if (!empty($profile->photo_url)) {
                 $this->deleteOldPublicPicture($profile->photo_url);
             }
