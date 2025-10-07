@@ -26,39 +26,101 @@ class AuthController extends Controller
         $file = $request->file('photo');
         if (!$file->isValid()) return null;
 
-        $ext = strtolower($file->getClientOriginalExtension() ?: 'jpg');
-        $filename = (string) Str::uuid() . '.' . $ext;
-
+        // buat folder kalau belum ada
         $dest = public_path('profile_picture');
         if (!File::exists($dest)) {
             File::makeDirectory($dest, 0755, true);
         }
 
-        // Pindahkan file ke public/profile_picture
+        // nama file unik
+        $ext = strtolower($file->getClientOriginalExtension() ?: 'jpg');
+        $filename = (string) Str::uuid() . '.' . $ext;
+
+        // pindahkan ke public/profile_picture
         $file->move($dest, $filename);
 
-        // URL absolut dari APP_URL
-        $base = rtrim(config('app.url'), '/'); // APP_URL
+        // kembalikan URL absolut untuk kolom photo_url
+        $base = rtrim(config('app.url'), '/');
         return $base . '/profile_picture/' . $filename;
     }
 
-    /**
-     * Hapus file lama di public/profile_picture jika URL menunjuk ke sana.
-     */
+    // hapus file lama (hanya yang ada di public/profile_picture)
     protected function deleteOldPublicPicture(?string $url): void
     {
         if (!$url) return;
-
-        $base = rtrim(config('app.url'), '/'); // APP_URL
-        $prefix = $base . '/profile_picture/';
-
+        $prefix = rtrim(config('app.url'), '/') . '/profile_picture/';
         if (str_starts_with($url, $prefix)) {
-            $filename = substr($url, strlen($prefix));
-            $fullPath = public_path('profile_picture/' . $filename);
-            if (File::exists($fullPath)) {
-                File::delete($fullPath);
-            }
+            $name = substr($url, strlen($prefix));
+            $path = public_path('profile_picture/' . $name);
+            if (File::exists($path)) File::delete($path);
         }
+    }
+
+    // ------- endpoint update profile (PATCH atau POST + _method=PATCH) -------
+    public function updateProfile(Request $request)
+    {
+        $data = $request->validate([
+            'name'    => ['nullable','string','max:100'],
+            'phone'   => ['nullable','string','max:30'],
+            'bio'     => ['nullable','string','max:1000'],
+            'address' => ['nullable','string','max:255'],
+            'services'=> ['nullable','array'],
+            'services.*' => ['string','max:100'],
+            'location_lat' => ['nullable','numeric','between:-90,90'],
+            'location_lng' => ['nullable','numeric','between:-180,180'],
+            // field file dari FE harus bernama "photo"
+            'photo'   => [ 'nullable', FileRule::image()->types(['jpg','jpeg','png','webp','heic'])->max(2*1024) ],
+        ]);
+
+        $user = $request->user();
+
+        // sinkron nama user
+        if (array_key_exists('name', $data) && $data['name'] !== null) {
+            $user->name = $data['name'];
+            $user->save();
+        }
+
+        // ambil/siapkan profile
+        $profile = Profile::find($user->id)
+                ?? new Profile(['id'=>$user->id, 'role'=>'customer', 'is_online'=>true]);
+
+        // isi kolom teks
+        foreach (['name','phone','bio','address','location_lat','location_lng'] as $k) {
+            if (array_key_exists($k, $data)) $profile->{$k} = $data[$k];
+        }
+        if (array_key_exists('services', $data)) {
+            // modelmu sudah $casts['services'=>'array'], jadi langsung assign array
+            $profile->services = $data['services'];
+        }
+
+        // foto baru?
+        if ($request->hasFile('photo')) {
+            if (!empty($profile->photo_url)) {
+                $this->deleteOldPublicPicture($profile->photo_url);
+            }
+            $profile->photo_url = $this->storeProfilePhoto($request); // ⬅️ simpan URL ke kolom photo_url
+        }
+
+        $profile->save();
+
+        return response()->json([
+            'ok' => true,
+            'profile' => [
+                'id'           => $profile->id,
+                'role'         => $profile->role,
+                'name'         => $profile->name,
+                'phone'        => $profile->phone,
+                'bio'          => $profile->bio,
+                'address'      => $profile->address,
+                'services'     => $profile->services, // sudah array
+                'location_lat' => $profile->location_lat,
+                'location_lng' => $profile->location_lng,
+                'photo_url'    => $profile->photo_url, // ⬅️ kolom yang kamu pakai
+                'is_online'    => (bool) $profile->is_online,
+                'created_at'   => $profile->created_at,
+                'updated_at'   => $profile->updated_at,
+            ],
+        ]);
     }
 
     /**
@@ -352,89 +414,7 @@ class AuthController extends Controller
         return response()->json($payload);
     }
 
-    /**
-     * PUT/PATCH /auth/profile  (+ POST multipart _method=PATCH)
-     * Update profile milik user login.
-     * Field: name, phone, bio, address, services[], location_lat, location_lng, photo (file)
-     */
-    public function updateProfile(Request $request)
-    {
-        /** @var \App\Models\User $user */
-        $user = $request->user();
-
-        // Validasi
-        $data = $request->validate([
-            'name'          => ['nullable','string','max:100'],
-            'phone'         => ['nullable','string','max:30'],
-            'bio'           => ['nullable','string','max:1000'],
-            'address'       => ['nullable','string','max:255'],
-            'services'      => ['nullable','array'],
-            'services.*'    => ['string','max:100'],
-            'location_lat'  => ['nullable','numeric','between:-90,90'],
-            'location_lng'  => ['nullable','numeric','between:-180,180'],
-
-            // file optional; nama field "photo"
-            'photo_url'         => ['nullable', FileRule::image()->types(['jpg','jpeg','png','webp','heic'])->max(2 * 1024)],
-        ]);
-
-        // Sinkron nama di tabel users
-        if (array_key_exists('name', $data) && $data['name'] !== null) {
-            $user->name = $data['name'];
-            $user->save();
-        }
-
-        // Ambil/siapkan profile
-        $profile = Profile::find($user->id);
-        if (!$profile) {
-            $profile = new Profile(['id' => $user->id, 'role' => 'customer', 'is_online' => true]);
-        }
-
-        // Update kolom teks
-        foreach (['name','phone','address','bio','location_lat','location_lng'] as $col) {
-            if (array_key_exists($col, $data)) {
-                $profile->{$col} = $data[$col];
-            }
-        }
-        if (array_key_exists('services', $data)) {
-
-            $profile->services = $data['services']; 
-        }
-
-        // Handle upload foto (optional)
-        if ($request->hasFile('photo_url')) {
-            if (!empty($profile->photo_url)) {
-                $this->deleteOldPublicPicture($profile->photo_url);
-            }
-            $newUrl = $this->storeProfilePhoto($request); // APP_URL/profile_picture/xxx.ext
-            $profile->photo_url = $newUrl;
-        }
-
-        $profile->save();
-
-        return response()->json([
-            'ok' => true,
-            'user' => [
-                'id'    => $user->id,
-                'name'  => $user->name,
-                'email' => $user->email,
-            ],
-            'profile' => [
-                'id'           => $profile->id,
-                'role'         => $profile->role,
-                'name'         => $profile->name,
-                'phone'        => $profile->phone,
-                'address'      => $profile->address,
-                'bio'          => $profile->bio,
-                'services'     => $profile->services,
-                'location_lat' => $profile->location_lat,
-                'location_lng' => $profile->location_lng,
-                'photo_url'    => $profile->photo_url,
-                'is_online'    => (bool) $profile->is_online,
-                'created_at'   => $profile->created_at,
-                'updated_at'   => $profile->updated_at,
-            ],
-        ]);
-    }
+   
 
     /**
      * PATCH /auth/profile/online
