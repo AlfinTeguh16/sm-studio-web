@@ -26,15 +26,27 @@ Route::prefix('auth')->group(function () {
 | Protected (Sanctum)
 |--------------------------------------------------------------------------
 */
-// Route::middleware('auth:sanctum')->group(function () {
+Route::middleware('auth:sanctum')->group(function () {
 
     // --- Auth / Profile ---
     Route::prefix('auth')->group(function () {
-        Route::get('/me',                [AuthController::class, 'me']);
-        Route::post('/logout',           [AuthController::class, 'logout']);              // ?all=true untuk revoke semua token
-        Route::match(['put','patch'], '/profile',        [AuthController::class, 'updateProfile']);
-        Route::patch('/profile/online',  [AuthController::class, 'toggleOnline']);        // { is_online: boolean }
-        Route::patch('/profile',        [AuthController::class, 'changeProfile']);      // { current_password, new_password, new_password_confirmation }
+        Route::get('/me',                  [AuthController::class, 'me']);
+        Route::post('/logout',             [AuthController::class, 'logout']); // ?all=true untuk revoke semua token
+
+        // Update profile:
+        // - PATCH JSON langsung
+        // - POST multipart (FormData) + _method=PATCH untuk upload foto
+        Route::patch('/profile',           [AuthController::class, 'updateProfile']);
+        Route::post('/profile',            [AuthController::class, 'updateProfile']); // untuk multipart + _method=PATCH
+
+        // Toggle online/offline
+        Route::patch('/profile/online',    [AuthController::class, 'toggleOnline']);
+
+        // Ganti password (JANGAN pakai /auth/profile agar tidak bentrok)
+        // body: { current_password, new_password, new_password_confirmation }
+        Route::post('/password',           [AuthController::class, 'changeProfile']);
+        // kalau mau pakai PATCH juga boleh:
+        // Route::patch('/password',       [AuthController::class, 'changeProfile']);
     });
  // --- MUA ---
     Route::get('/mua/{muaId}', [MuaController::class, 'getMuaProfile']);
@@ -111,7 +123,7 @@ Route::prefix('auth')->group(function () {
 
    
 
-// });
+});
 
 /*
 |--------------------------------------------------------------------------
