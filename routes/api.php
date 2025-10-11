@@ -36,7 +36,7 @@ Route::middleware('auth:sanctum')->group(function () {
         // Update profile:
         // - PATCH JSON langsung
         // - POST multipart (FormData) + _method=PATCH untuk upload foto
-        Route::patch('/profile',           [AuthController::class, 'updateProfile']);
+        // Route::patch('/profile',           [AuthController::class, 'updateProfile']);
         Route::post('/profile',            [AuthController::class, 'updateProfile']); // untuk multipart + _method=PATCH
 
         // Toggle online/offline
@@ -72,8 +72,9 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // CREATE / UPDATE / DELETE
     Route::post(   '/offerings',              [OfferingController::class, 'store']);
-    Route::match(['put','patch'], '/offerings/{offering}', [OfferingController::class, 'update']);
+    Route::patch( '/offerings/{offering}', [OfferingController::class, 'update']);
     Route::delete( '/offerings/{offering}',   [OfferingController::class, 'destroy']);
+    Route::delete('/offerings/{offering}/pictures', [OfferingController::class, 'deletePictures']);
 
     // MEDIA & ADD-ONS
     Route::patch( '/offerings/{offering}/pictures', [OfferingController::class, 'pictures']); // mode=add|remove|replace, pictures:[]

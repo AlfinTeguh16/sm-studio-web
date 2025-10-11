@@ -78,7 +78,7 @@ class BookingController extends Controller
                 $booking->setAttribute('payment_status', 'unpaid');
             }
             if (empty($booking->getAttribute('job_status'))) {
-                $booking->setAttribute('job_status', 'pending');
+                $booking->setAttribute('job_status', 'confirmed');
             }
             if (empty($booking->getAttribute('invoice_date'))) {
                 $booking->setAttribute('invoice_date', Carbon::now());

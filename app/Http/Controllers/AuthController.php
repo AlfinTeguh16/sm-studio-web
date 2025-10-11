@@ -13,6 +13,8 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rules\File as FileRule;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Log;
 
 class AuthController extends Controller
 {
@@ -44,83 +46,132 @@ class AuthController extends Controller
         return $base . '/profile_picture/' . $filename;
     }
 
-    // hapus file lama (hanya yang ada di public/profile_picture)
-    protected function deleteOldPublicPicture(?string $url): void
-    {
-        if (!$url) return;
-        $prefix = rtrim(config('app.url'), '/') . '/profile_picture/';
-        if (str_starts_with($url, $prefix)) {
-            $name = substr($url, strlen($prefix));
-            $path = public_path('profile_picture/' . $name);
-            if (File::exists($path)) File::delete($path);
-        }
-    }
-
-    // ------- endpoint update profile (PATCH atau POST + _method=PATCH) -------
     public function updateProfile(Request $request)
     {
+        // --- 1) Validasi input ---
         $data = $request->validate([
-            'name'    => ['nullable','string','max:100'],
-            'phone'   => ['nullable','string','max:30'],
-            'bio'     => ['nullable','string','max:1000'],
-            'address' => ['nullable','string','max:255'],
-            'services'=> ['nullable','array'],
-            'services.*' => ['string','max:100'],
-            'location_lat' => ['nullable','numeric','between:-90,90'],
-            'location_lng' => ['nullable','numeric','between:-180,180'],
-            // field file dari FE harus bernama "photo"
-            'photo'   => [ 'nullable', FileRule::image()->types(['jpg','jpeg','png','webp','heic'])->max(2*1024) ],
+            'name'          => ['nullable','string','max:100'],
+            'phone'         => ['nullable','string','max:30'],
+            'bio'           => ['nullable','string','max:1000'],
+            'address'       => ['nullable','string','max:255'],
+            'services'      => ['nullable'], // bisa array atau string CSV, kita normalize di bawah
+            'services.*'    => ['sometimes','string','max:100'],
+            'location_lat'  => ['nullable','numeric','between:-90,90'],
+            'location_lng'  => ['nullable','numeric','between:-180,180'],
+
+            'photo_url'         => ['nullable', FileRule::image()->types(['jpg','jpeg','png','webp','heic'])->max(2 * 1024)],
+            // kalau ingin paksa hapus foto lama
+            'remove_photo'  => ['nullable','boolean'],
         ]);
+
+        // dd($data);
 
         $user = $request->user();
 
-        // sinkron nama user
-        if (array_key_exists('name', $data) && $data['name'] !== null) {
-            $user->name = $data['name'];
-            $user->save();
-        }
-
-        // ambil/siapkan profile
-        $profile = Profile::find($user->id)
-                ?? new Profile(['id'=>$user->id, 'role'=>'customer', 'is_online'=>true]);
-
-        // isi kolom teks
-        foreach (['name','phone','bio','address','location_lat','location_lng'] as $k) {
-            if (array_key_exists($k, $data)) $profile->{$k} = $data[$k];
-        }
-        if (array_key_exists('services', $data)) {
-            // modelmu sudah $casts['services'=>'array'], jadi langsung assign array
-            $profile->services = $data['services'];
-        }
-
-        // foto baru?
-        if ($request->hasFile('photo')) {
-            if (!empty($profile->photo_url)) {
-                $this->deleteOldPublicPicture($profile->photo_url);
+        // --- 2) Normalisasi services: izinkan string "a,b,c" atau array ["a","b","c"] ---
+        if (array_key_exists('services', $data) && $data['services'] !== null) {
+            if (is_string($data['services'])) {
+                // pecah CSV & trim
+                $items = array_filter(array_map(fn($s) => trim($s), explode(',', $data['services'])));
+                $data['services'] = array_values($items);
+            } elseif (is_array($data['services'])) {
+                // pastikan semua string & trim
+                $data['services'] = array_values(array_filter(array_map(fn($s) => is_string($s) ? trim($s) : $s, $data['services']), fn($s) => $s !== ''));
+            } else {
+                $data['services'] = null;
             }
-            $profile->photo_url = $this->storeProfilePhoto($request); // ⬅️ simpan URL ke kolom photo_url
         }
 
-        $profile->save();
+        // --- 3) Eksekusi dalam transaksi agar konsisten ---
+        $result = DB::transaction(function () use ($data, $user, $request) {
+
+            // 3a) Sinkron nama user (opsional jika diisi)
+            if (array_key_exists('name', $data) && $data['name'] !== null) {
+                $user->name = $data['name'];
+                $user->save();
+            }
+
+            // 3b) Ambil / buat profile dengan PK = user id (UUID)
+            $profile = Profile::firstOrNew(['id' => $user->id]);
+            // Default role jika belum ada
+            if (!$profile->exists && empty($profile->role)) {
+                $profile->role = 'customer';
+            }
+
+            // 3c) Isi field yang ada di profiles
+            foreach (['phone','bio','address','location_lat','location_lng'] as $f) {
+                if (array_key_exists($f, $data)) {
+                    $profile->{$f} = $data[$f];
+                }
+            }
+            if (array_key_exists('services', $data)) {
+                $profile->services = $data['services']; // cast ke array oleh model
+            }
+
+            // 3d) Kelola foto: hapus, ganti, atau biarkan
+            $removePhoto = (bool)($data['remove_photo'] ?? false);
+            if ($removePhoto && $profile->photo_url) {
+                // Hapus file lama jika berasal dari storage public (opsional: validasi path)
+                $this->deleteOldPhotoIfOwned($profile->photo_url);
+                $profile->photo_url = null;
+            }
+
+            if ($request->hasFile('photo_url')) {
+                $uploaded = $request->file('photo_url');
+
+                // Simpan file ke disk 'public' => storage/app/public/profile_photos/xxxxxx.ext
+                $path = $uploaded->store('profile_photos', 'public');
+
+                // Hapus foto lama (jika ada) setelah unggah baru sukses
+                if (!empty($profile->photo_url)) {
+                    $this->deleteOldPhotoIfOwned($profile->photo_url);
+                }
+
+                // Set URL publik (via storage:link)
+                $path = $request->file('photo_url')->store('profile_photos', 'public');
+                $publicUrl = Storage::url($path);
+
+            }
+
+            $profile->save();
+
+            // Muat relasi terkini
+            $user->load('profile');
+
+            return [
+                'user'    => $user,
+                'profile' => $user->profile,
+            ];
+        });
 
         return response()->json([
-            'ok' => true,
-            'profile' => [
-                'id'           => $profile->id,
-                'role'         => $profile->role,
-                'name'         => $profile->name,
-                'phone'        => $profile->phone,
-                'bio'          => $profile->bio,
-                'address'      => $profile->address,
-                'services'     => $profile->services, // sudah array
-                'location_lat' => $profile->location_lat,
-                'location_lng' => $profile->location_lng,
-                'photo_url'    => $profile->photo_url, // ⬅️ kolom yang kamu pakai
-                'is_online'    => (bool) $profile->is_online,
-                'created_at'   => $profile->created_at,
-                'updated_at'   => $profile->updated_at,
-            ],
+            'message' => 'Profile updated successfully',
+            'data'    => $result,
         ]);
+    }
+
+    /**
+     * Hapus file lama jika berada pada disk 'public' dan path termasuk 'profile_photos/'.
+     * Ini untuk mencegah menghapus URL eksternal yang bukan milik storage kita.
+     */
+    protected function deleteOldPhotoIfOwned(?string $photoUrl): void
+    {
+        if (!$photoUrl) return;
+
+        // Contoh URL: /storage/profile_photos/xxx.jpg atau http(s)://domain/storage/profile_photos/xxx.jpg
+        // Ambil bagian setelah '/storage/'
+        $storagePos = strpos($photoUrl, '/storage/');
+        if ($storagePos === false) {
+            return; // bukan dari storage publik
+        }
+
+        $relative = substr($photoUrl, $storagePos + strlen('/storage/')); // profile_photos/xxx.jpg
+        if (str_starts_with($relative, 'profile_photos/')) {
+            // Pastikan file ada sebelum delete
+            if (Storage::disk('public')->exists($relative)) {
+                Storage::disk('public')->delete($relative);
+            }
+        }
     }
 
     /**
@@ -212,23 +263,84 @@ class AuthController extends Controller
      */
     public function login(Request $request)
     {
-        $data = $request->validate([
-            'email'       => ['required','email'],
-            'password'    => ['required','string'],
+        // Generate request id untuk membantu trace di log
+        $rid = (string) Str::uuid();
+
+        // Catat attempt awal (email dimasking)
+        Log::channel('auth')->info('LOGIN_ATTEMPT', [
+            'rid'   => $rid,
+            'email' => $this->maskEmail($request->input('email')),
+            'ip'    => $request->ip(),
+            'ua'    => $request->userAgent(),
         ]);
 
+        try {
+            $data = $request->validate([
+                'email'    => ['required','email'],
+                'password' => ['required','string'],
+            ]);
+        } catch (\Throwable $e) {
+            Log::channel('auth')->warning('LOGIN_VALIDATION_FAILED', [
+                'rid'     => $rid,
+                'message' => $e->getMessage(),
+                // Jangan log input sensitif
+            ]);
+
+            return response()->json(['error' => 'Validasi gagal'], 422);
+        }
+
         $user = User::where('email', $data['email'])->first();
-        if (!$user || !Hash::check($data['password'], $user->password)) {
+
+        if (!$user) {
+            Log::channel('auth')->warning('LOGIN_FAILED_NO_USER', [
+                'rid'   => $rid,
+                'email' => $this->maskEmail($data['email']),
+                'ip'    => $request->ip(),
+            ]);
+
             return response()->json(['error' => 'Email atau password salah'], 422);
         }
 
-        $token = $user->createToken('api')->plainTextToken;
+        if (!Hash::check($data['password'], $user->password)) {
+            Log::channel('auth')->warning('LOGIN_FAILED_BAD_PASSWORD', [
+                'rid'    => $rid,
+                'userId' => $user->id,
+                'ip'     => $request->ip(),
+            ]);
+
+            return response()->json(['error' => 'Email atau password salah'], 422);
+        }
+
+        $plainToken = $user->createToken('api')->plainTextToken;
+        // Sanctum plain text: "{token_id}|{token_value}", ambil hanya ID untuk log
+        $tokenId = explode('|', $plainToken)[0] ?? null;
+
+        Log::channel('auth')->info('LOGIN_SUCCESS', [
+            'rid'       => $rid,
+            'userId'    => $user->id,
+            'tokenId'   => $tokenId,
+            'ip'        => $request->ip(),
+            'ua_hash'   => hash('sha256', (string) $request->userAgent()), // optional: hash UA
+            'profileId' => optional($user->profile)->id,
+        ]);
 
         return response()->json([
-            'token'   => $token,
+            'token'   => $plainToken,
             'user'    => $user,
             'profile' => $user->profile,
         ]);
+    }
+
+    /**
+     * Mask sebagian email untuk log.
+     * contoh: johndoe@gmail.com -> jo***@gmail.com
+     */
+    private function maskEmail(?string $email): ?string
+    {
+        if (!$email || !str_contains($email, '@')) return $email;
+        [$local, $domain] = explode('@', $email, 2);
+        $visible = mb_substr($local, 0, min(2, mb_strlen($local)));
+        return $visible . '***@' . $domain;
     }
 
     /**
