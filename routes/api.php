@@ -37,7 +37,7 @@ Route::middleware('auth:sanctum')->group(function () {
         // - PATCH JSON langsung
         // - POST multipart (FormData) + _method=PATCH untuk upload foto
         // Route::patch('/profile',           [AuthController::class, 'updateProfile']);
-        Route::post('/profile',            [AuthController::class, 'updateProfile']); // untuk multipart + _method=PATCH
+        Route::patch('/profile',            [AuthController::class, 'updateProfile']); // untuk multipart + _method=PATCH
 
         // Toggle online/offline
         Route::patch('/profile/online',    [AuthController::class, 'toggleOnline']);
