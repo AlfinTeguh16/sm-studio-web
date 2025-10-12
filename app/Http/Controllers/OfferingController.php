@@ -260,8 +260,8 @@ class OfferingController extends Controller
             'offer_pictures.*'    => ['string','max:1000'],
 
             // Multipart files
-            'offer_images'        => ['sometimes','array'],
-            'offer_images.*'      => ['file','image','max:4096'],
+            'offer_images'   => ['sometimes'],
+            'offer_images.*' => ['file','image','max:5120'],
             'offer_image'         => ['sometimes','file','image','max:4096'],
 
             // Add-ons
