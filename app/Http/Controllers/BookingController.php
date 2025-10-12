@@ -7,6 +7,7 @@ use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class BookingController extends Controller
 {
@@ -170,15 +171,68 @@ class BookingController extends Controller
     }
 
     /** MUA menekan tombol "Selesai" */
-    public function markComplete(Booking $booking)
+    public function markComplete(Request $request, Booking $booking)
     {
-        $booking->setAttribute('job_status', 'completed');
-        $booking->save();
+        $rid = (string) \Illuminate\Support\Str::uuid();
 
-        return response()->json([
-            'message' => 'Job completed',
-            'data'    => $booking
+        Log::channel('bookings')->info('BOOKING_MARK_COMPLETE_ATTEMPT', [
+            'rid'        => $rid,
+            'booking_id' => $booking->id,
+            'before'     => [
+                'status'         => $booking->status,
+                'job_status'     => $booking->job_status,
+                'payment_status' => $booking->payment_status,
+                'paid_at'        => $booking->paid_at,
+            ],
+            'by'         => optional($request->user())->id,
+            'ip'         => $request->ip(),
         ]);
+
+        try {
+            $updated = DB::transaction(function () use ($booking) {
+                // Tandai pekerjaan & status utama sebagai completed
+                $booking->job_status = 'completed';
+                $booking->status     = 'completed';
+
+                // Payment: set ke paid bila masih unpaid/partial
+                if (!in_array($booking->payment_status, ['paid', 'refunded', 'void'], true)) {
+                    $booking->payment_status = 'paid';
+                }
+
+                // Timestamp paid_at bila belum ada dan payment_status paid
+                if ($booking->payment_status === 'paid' && empty($booking->paid_at)) {
+                    $booking->paid_at = Carbon::now();
+                }
+
+                $booking->save();
+
+                return $booking->fresh();
+            });
+
+            Log::channel('bookings')->info('BOOKING_MARK_COMPLETE_SUCCESS', [
+                'rid'        => $rid,
+                'booking_id' => $booking->id,
+                'after'      => [
+                    'status'         => $updated->status,
+                    'job_status'     => $updated->job_status,
+                    'payment_status' => $updated->payment_status,
+                    'paid_at'        => $updated->paid_at,
+                ],
+            ]);
+
+            return response()->json([
+                'message' => 'Booking completed',
+                'data'    => $updated,
+            ]);
+        } catch (\Throwable $e) {
+            Log::channel('bookings')->error('BOOKING_MARK_COMPLETE_ERROR', [
+                'rid'        => $rid,
+                'booking_id' => $booking->id,
+                'error'      => $e->getMessage(),
+            ]);
+            // biarkan Laravel tangani atau kembalikan 500 JSON ringkas
+            return response()->json(['message' => 'Gagal menandai selesai'], 500);
+        }
     }
 
     /**
