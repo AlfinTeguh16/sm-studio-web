@@ -8,161 +8,270 @@ use Illuminate\Validation\Rule;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 
 class BookingController extends Controller
 {
+    /** Context standar untuk log */
+    private function ctx(Request $req, array $extra = []): array
+    {
+        $auth = $req->user();
+        $hdr  = array_change_key_case($req->headers->all(), CASE_LOWER);
+
+        // masking header sensitif
+        foreach (['authorization','cookie','x-xsrf-token'] as $h) {
+            if (isset($hdr[$h])) $hdr[$h] = ['***'];
+        }
+
+        // ringkas payload
+        $raw = $req->all();
+        $rawJson = json_encode($raw);
+        if (is_string($rawJson) && strlen($rawJson) > 1200) {
+            $rawJson = substr($rawJson, 0, 1200).'...<truncated>';
+        }
+
+        return array_merge([
+            'rid'     => (string) Str::uuid(),
+            'route'   => $req->path(),
+            'method'  => $req->method(),
+            'ip'      => $req->ip(),
+            'user_id' => optional($auth)->id,
+            'headers' => $hdr,
+            'payload' => $rawJson,
+        ], $extra);
+    }
+
     public function index(Request $req)
     {
-        $q = Booking::query();
+        $ctx = $this->ctx($req);
+        Log::channel('bookings')->info('BOOKING_INDEX_START', $ctx);
 
-        if ($req->filled('mua_id')) {
-            $q->where('mua_id', $req->string('mua_id'));
-        }
-        if ($req->filled('customer_id')) {
-            $q->where('customer_id', $req->string('customer_id'));
-        }
-        if ($req->filled('job_status')) {
-            $q->where('job_status', $req->string('job_status'));
-        }
-        if ($req->filled('payment_status')) {
-            $q->where('payment_status', $req->string('payment_status'));
-        }
+        try {
+            $q = Booking::query();
 
-        $data = $q->latest('id')->paginate($req->integer('per_page', 20));
-        return response()->json($data);
+            if ($req->filled('mua_id'))         $q->where('mua_id', $req->string('mua_id'));
+            if ($req->filled('customer_id'))    $q->where('customer_id', $req->string('customer_id'));
+            if ($req->filled('job_status'))     $q->where('job_status', $req->string('job_status'));
+            if ($req->filled('payment_status')) $q->where('payment_status', $req->string('payment_status'));
+
+            $per = $req->integer('per_page', 20);
+            $data = $q->latest('id')->paginate($per);
+
+            Log::channel('bookings')->info('BOOKING_INDEX_SUCCESS', $ctx + [
+                'count'   => $data->count(),
+                'perPage' => $per,
+                'page'    => $data->currentPage(),
+            ]);
+
+            return response()->json($data);
+        } catch (\Throwable $e) {
+            Log::channel('bookings')->error('BOOKING_INDEX_ERROR', $ctx + [
+                'error' => $e->getMessage(),
+            ]);
+            return response()->json(['message' => 'Failed to list bookings'], 500);
+        }
     }
 
     public function store(Request $req)
     {
-        $data = $req->validate([
-            'customer_id'      => ['required','uuid'],
-            'mua_id'           => ['required','uuid'],
-            'offering_id'      => ['nullable','integer','exists:offerings,id'],
-            'booking_date'     => ['required','date_format:Y-m-d'],
-            'booking_time'     => ['required','date_format:H:i'],
-            'person'           => ['required','integer','min:1'],
-            'service_type'     => ['required', Rule::in(['home_service','studio'])],
-            'location_address' => ['nullable','string','max:500'],
-            'notes'            => ['nullable','string','max:1000'],
+        $ctx = $this->ctx($req);
+        Log::channel('bookings')->info('BOOKING_STORE_VALIDATE_START', $ctx);
 
-            // invoice meta (opsional)
-            'invoice_date'     => ['nullable','date'],
-            'due_date'         => ['nullable','date','after_or_equal:invoice_date'],
+        try {
+            $data = $req->validate([
+                'customer_id'      => ['required','uuid'],
+                'mua_id'           => ['required','uuid'],
+                'offering_id'      => ['nullable','integer','exists:offerings,id'],
+                'booking_date'     => ['required','date_format:Y-m-d'],
+                'booking_time'     => ['required','date_format:H:i'],
+                'person'           => ['required','integer','min:1'],
+                'service_type'     => ['required', Rule::in(['home_service','studio'])],
+                'location_address' => ['nullable','string','max:500'],
+                'notes'            => ['nullable','string','max:1000'],
 
-            // pricing
-            'amount'           => ['nullable','numeric'],
-            'selected_add_ons' => ['nullable','array'],
-            'selected_add_ons.*.name'  => ['required_with:selected_add_ons','string','max:100'],
-            'selected_add_ons.*.price' => ['required_with:selected_add_ons','numeric'],
-            'discount_amount'  => ['nullable','numeric'],
-            'tax'              => ['nullable','numeric'], // persen (legacy)
+                'invoice_date'     => ['nullable','date'],
+                'due_date'         => ['nullable','date','after_or_equal:invoice_date'],
 
-            // payment (manual)
-            'payment_method'   => ['nullable','string','max:50'],
-        ]);
+                'amount'           => ['nullable','numeric'],
+                'selected_add_ons' => ['nullable','array'],
+                'selected_add_ons.*.name'  => ['required_with:selected_add_ons','string','max:100'],
+                'selected_add_ons.*.price' => ['required_with:selected_add_ons','numeric'],
+                'discount_amount'  => ['nullable','numeric'],
+                'tax'              => ['nullable','numeric'],
 
-        return DB::transaction(function () use ($data) {
-            $booking = new Booking();
+                'payment_method'   => ['nullable','string','max:50'],
+            ]);
+        } catch (\Illuminate\Validation\ValidationException $ve) {
+            Log::channel('bookings')->warning('BOOKING_STORE_VALIDATE_FAIL', $ctx + [
+                'errors' => $ve->errors(),
+            ]);
+            throw $ve; // biar tetap 422 ke client
+        }
 
-            // set via setAttribute agar aman dari linter
-            foreach ($data as $k => $v) {
-                // cast tanggal dengan Carbon bila perlu
-                if (in_array($k, ['booking_date','invoice_date','due_date']) && !empty($v)) {
-                    $booking->setAttribute($k, Carbon::parse($v));
-                } else {
-                    $booking->setAttribute($k, $v);
+        Log::channel('bookings')->info('BOOKING_STORE_DB_START', $ctx);
+
+        try {
+            $result = DB::transaction(function () use ($data, $ctx) {
+                $booking = new Booking();
+
+                foreach ($data as $k => $v) {
+                    if (in_array($k, ['booking_date','invoice_date','due_date']) && !empty($v)) {
+                        $booking->setAttribute($k, Carbon::parse($v));
+                    } else {
+                        $booking->setAttribute($k, $v);
+                    }
                 }
-            }
 
-            // default yang aman
-            if (empty($booking->getAttribute('payment_status'))) {
-                $booking->setAttribute('payment_status', 'unpaid');
-            }
-            if (empty($booking->getAttribute('job_status'))) {
-                $booking->setAttribute('job_status', 'confirmed');
-            }
-            if (empty($booking->getAttribute('invoice_date'))) {
-                $booking->setAttribute('invoice_date', Carbon::now());
-            }
+                if (empty($booking->getAttribute('payment_status'))) $booking->setAttribute('payment_status', 'unpaid');
+                if (empty($booking->getAttribute('job_status')))     $booking->setAttribute('job_status', 'confirmed');
+                if (empty($booking->getAttribute('invoice_date')))   $booking->setAttribute('invoice_date', Carbon::now());
 
-            // hitung total (model sudah handle & simpan dengan setAttribute)
-            $booking->computeTotals($booking->getAttribute('selected_add_ons'));
+                $booking->computeTotals($booking->getAttribute('selected_add_ons'));
+                $booking->save();
 
-            $booking->save();
+                Log::channel('bookings')->info('BOOKING_STORE_DB_SAVED', $ctx + [
+                    'booking_id'     => $booking->id,
+                    'customer_id'    => $booking->customer_id,
+                    'mua_id'         => $booking->mua_id,
+                    'grand_total'    => $booking->grand_total,
+                    'payment_status' => $booking->payment_status,
+                    'job_status'     => $booking->job_status,
+                ]);
+
+                return $booking;
+            });
+
+            Log::channel('bookings')->info('BOOKING_STORE_SUCCESS', $ctx + [
+                'booking_id' => $result->id,
+            ]);
 
             return response()->json([
                 'message' => 'Booking (invoice) created',
-                'data'    => $booking
+                'data'    => $result
             ], 201);
-        });
+        } catch (\Throwable $e) {
+            Log::channel('bookings')->error('BOOKING_STORE_ERROR', $ctx + [
+                'error' => $e->getMessage(),
+            ]);
+            return response()->json(['message' => 'Failed to create booking'], 500);
+        }
     }
 
     public function show(Booking $booking)
     {
+        // optional logging ringan
+        Log::channel('bookings')->info('BOOKING_SHOW', [
+            'booking_id' => $booking->id,
+        ]);
+
         return response()->json($booking);
     }
 
     public function update(Request $req, Booking $booking)
     {
-        $data = $req->validate([
-            'offering_id'      => ['nullable','integer','exists:offerings,id'],
-            'booking_date'     => ['nullable','date_format:Y-m-d'],
-            'booking_time'     => ['nullable','date_format:H:i'],
-            'service_type'     => ['nullable', Rule::in(['home_service','studio'])],
-            'location_address' => ['nullable','string','max:500'],
-            'notes'            => ['nullable','string','max:1000'],
+        $ctx = $this->ctx($req, ['booking_id' => $booking->id]);
+        Log::channel('bookings')->info('BOOKING_UPDATE_VALIDATE_START', $ctx);
 
-            'invoice_date'     => ['nullable','date'],
-            'due_date'         => ['nullable','date','after_or_equal:invoice_date'],
+        try {
+            $data = $req->validate([
+                'offering_id'      => ['nullable','integer','exists:offerings,id'],
+                'booking_date'     => ['nullable','date_format:Y-m-d'],
+                'booking_time'     => ['nullable','date_format:H:i'],
+                'service_type'     => ['nullable', Rule::in(['home_service','studio'])],
+                'location_address' => ['nullable','string','max:500'],
+                'notes'            => ['nullable','string','max:1000'],
 
-            'amount'           => ['nullable','numeric'],
-            'selected_add_ons' => ['nullable','array'],
-            'selected_add_ons.*.name'  => ['required_with:selected_add_ons','string','max:100'],
-            'selected_add_ons.*.price' => ['required_with:selected_add_ons','numeric'],
-            'discount_amount'  => ['nullable','numeric'],
-            'tax'              => ['nullable','numeric'],
+                'invoice_date'     => ['nullable','date'],
+                'due_date'         => ['nullable','date','after_or_equal:invoice_date'],
 
-            'payment_method'   => ['nullable','string','max:50'],
-            'payment_status'   => ['nullable', Rule::in(['unpaid','partial','paid','refunded','void'])],
-            'job_status'       => ['nullable', Rule::in(['pending','confirmed','in_progress','completed','cancelled'])],
-        ]);
+                'amount'           => ['nullable','numeric'],
+                'selected_add_ons' => ['nullable','array'],
+                'selected_add_ons.*.name'  => ['required_with:selected_add_ons','string','max:100'],
+                'selected_add_ons.*.price' => ['required_with:selected_add_ons','numeric'],
+                'discount_amount'  => ['nullable','numeric'],
+                'tax'              => ['nullable','numeric'],
 
-        return DB::transaction(function () use ($booking, $data) {
-            foreach ($data as $k => $v) {
-                if (in_array($k, ['booking_date','invoice_date','due_date']) && !empty($v)) {
-                    $booking->setAttribute($k, Carbon::parse($v));
-                } else {
-                    $booking->setAttribute($k, $v);
+                'payment_method'   => ['nullable','string','max:50'],
+                'payment_status'   => ['nullable', Rule::in(['unpaid','partial','paid','refunded','void'])],
+                'job_status'       => ['nullable', Rule::in(['pending','confirmed','in_progress','completed','cancelled'])],
+            ]);
+        } catch (\Illuminate\Validation\ValidationException $ve) {
+            Log::channel('bookings')->warning('BOOKING_UPDATE_VALIDATE_FAIL', $ctx + [
+                'errors' => $ve->errors(),
+            ]);
+            throw $ve;
+        }
+
+        Log::channel('bookings')->info('BOOKING_UPDATE_DB_START', $ctx);
+
+        try {
+            $updated = DB::transaction(function () use ($booking, $data, $ctx) {
+                foreach ($data as $k => $v) {
+                    if (in_array($k, ['booking_date','invoice_date','due_date']) && !empty($v)) {
+                        $booking->setAttribute($k, Carbon::parse($v));
+                    } else {
+                        $booking->setAttribute($k, $v);
+                    }
                 }
-            }
 
-            // re-calc jika ada field harga terkait
-            $needRecalc = collect(['amount','selected_add_ons','discount_amount','tax'])
-                ->some(fn($k) => array_key_exists($k, $data));
+                $needRecalc = collect(['amount','selected_add_ons','discount_amount','tax'])
+                    ->some(fn($k) => array_key_exists($k, $data));
 
-            if ($needRecalc) {
-                $addOns = $booking->getAttribute('selected_add_ons');
-                if (is_string($addOns)) {
-                    $decoded = json_decode($addOns, true);
-                    $addOns = json_last_error() === JSON_ERROR_NONE ? $decoded : null;
+                if ($needRecalc) {
+                    $addOns = $booking->getAttribute('selected_add_ons');
+                    if (is_string($addOns)) {
+                        $decoded = json_decode($addOns, true);
+                        $addOns = json_last_error() === JSON_ERROR_NONE ? $decoded : null;
+                    }
+                    $booking->computeTotals($addOns);
                 }
-                $booking->computeTotals($addOns);
-            }
 
-            $booking->save();
+                $booking->save();
+
+                Log::channel('bookings')->info('BOOKING_UPDATE_DB_SAVED', $ctx + [
+                    'payment_status' => $booking->payment_status,
+                    'job_status'     => $booking->job_status,
+                    'grand_total'    => $booking->grand_total,
+                ]);
+
+                return $booking;
+            });
+
+            Log::channel('bookings')->info('BOOKING_UPDATE_SUCCESS', $ctx);
 
             return response()->json([
                 'message' => 'Booking updated',
-                'data'    => $booking
+                'data'    => $updated
             ]);
-        });
+        } catch (\Throwable $e) {
+            Log::channel('bookings')->error('BOOKING_UPDATE_ERROR', $ctx + [
+                'error' => $e->getMessage(),
+            ]);
+            return response()->json(['message' => 'Failed to update booking'], 500);
+        }
     }
 
     /** Mulai pekerjaan oleh MUA */
     public function markInProgress(Booking $booking)
     {
+        Log::channel('bookings')->info('BOOKING_MARK_IN_PROGRESS', [
+            'booking_id' => $booking->id,
+            'before'     => [
+                'job_status'     => $booking->job_status,
+                'payment_status' => $booking->payment_status,
+            ],
+        ]);
+
         $booking->setAttribute('job_status', 'in_progress');
         $booking->save();
+
+        Log::channel('bookings')->info('BOOKING_MARK_IN_PROGRESS_SUCCESS', [
+            'booking_id' => $booking->id,
+            'after'      => [
+                'job_status'     => $booking->job_status,
+                'payment_status' => $booking->payment_status,
+            ],
+        ]);
 
         return response()->json([
             'message' => 'Job in progress',
@@ -173,7 +282,7 @@ class BookingController extends Controller
     /** MUA menekan tombol "Selesai" */
     public function markComplete(Request $request, Booking $booking)
     {
-        $rid = (string) \Illuminate\Support\Str::uuid();
+        $rid = (string) Str::uuid();
 
         Log::channel('bookings')->info('BOOKING_MARK_COMPLETE_ATTEMPT', [
             'rid'        => $rid,
@@ -190,22 +299,17 @@ class BookingController extends Controller
 
         try {
             $updated = DB::transaction(function () use ($booking) {
-                // Tandai pekerjaan & status utama sebagai completed
                 $booking->job_status = 'completed';
                 $booking->status     = 'completed';
 
-                // Payment: set ke paid bila masih unpaid/partial
                 if (!in_array($booking->payment_status, ['paid', 'refunded', 'void'], true)) {
                     $booking->payment_status = 'paid';
                 }
-
-                // Timestamp paid_at bila belum ada dan payment_status paid
                 if ($booking->payment_status === 'paid' && empty($booking->paid_at)) {
                     $booking->paid_at = Carbon::now();
                 }
 
                 $booking->save();
-
                 return $booking->fresh();
             });
 
@@ -230,25 +334,29 @@ class BookingController extends Controller
                 'booking_id' => $booking->id,
                 'error'      => $e->getMessage(),
             ]);
-            // biarkan Laravel tangani atau kembalikan 500 JSON ringkas
             return response()->json(['message' => 'Gagal menandai selesai'], 500);
         }
     }
 
     /**
-     * (Opsional) Catat pembayaran manual sederhana.
-     * Body: { "amount": 100000, "paid_at": "2025-10-04 14:15:00" }
-     * Logika: jika total pembayaran >= grand_total → payment_status = paid, else partial.
+     * Catat pembayaran manual sederhana.
      */
     public function recordPayment(Request $req, Booking $booking)
     {
-        $payload = $req->validate([
-            'amount'  => ['required','numeric','min:0'],
-            'paid_at' => ['nullable','date'],
-        ]);
+        $ctx = $this->ctx($req, ['booking_id' => $booking->id]);
 
-        // ambil total paid sebelumnya dari kolom paid_at? (Tidak ada log payments di tabel terpisah)
-        // Untuk versi simpel, kita cuma update status berdasar amount sekali ini:
+        try {
+            $payload = $req->validate([
+                'amount'  => ['required','numeric','min:0'],
+                'paid_at' => ['nullable','date'],
+            ]);
+        } catch (\Illuminate\Validation\ValidationException $ve) {
+            Log::channel('bookings')->warning('BOOKING_RECORD_PAYMENT_VALIDATE_FAIL', $ctx + [
+                'errors' => $ve->errors(),
+            ]);
+            throw $ve;
+        }
+
         $grandTotal = (float) ($booking->getAttribute('grand_total') ?? 0);
         $payAmount  = (float) $payload['amount'];
 
@@ -268,6 +376,12 @@ class BookingController extends Controller
 
         $booking->save();
 
+        Log::channel('bookings')->info('BOOKING_RECORD_PAYMENT_SAVED', $ctx + [
+            'grand_total' => $grandTotal,
+            'paid_amount' => $payAmount,
+            'payment_status' => $booking->payment_status,
+        ]);
+
         return response()->json([
             'message' => 'Payment recorded',
             'data'    => $booking
@@ -276,44 +390,62 @@ class BookingController extends Controller
 
     public function getUserBookings(Request $request, string $userId)
     {
+        $ctx = $this->ctx($request, ['query_user_id' => $userId]);
+
         $auth = $request->user();
         if (!$auth) {
+            Log::channel('bookings')->warning('GET_USER_BOOKINGS_UNAUTH', $ctx);
             return response()->json(['message' => 'Unauthenticated'], 401);
         }
-        // Hanya boleh akses milik sendiri
         if ((string) $auth->id !== (string) $userId) {
+            Log::channel('bookings')->warning('GET_USER_BOOKINGS_FORBIDDEN', $ctx + [
+                'auth_id' => $auth->id,
+            ]);
             return response()->json(['message' => 'Forbidden'], 403);
         }
-    
-        $perPage = min((int) $request->query('per_page', 10), 100);
-        $status  = $request->query('status');
 
-    
-        $q = DB::table('bookings as b')
-            ->join('profiles as mp', 'mp.id', '=', 'b.mua_id')
-            ->leftJoin('offerings as o', 'o.id', '=', 'b.offering_id')
-            ->where('b.customer_id', $userId)
-            ->select([
-                'b.id',
-                'b.booking_date',
-                'b.booking_time',
-                'b.status',
-                'b.payment_status',
-                'b.grand_total',
-                'b.invoice_number',
-                'o.name_offer',
-                'o.price as offering_price',
-                'mp.name as mua_name',
-                'mp.photo_url as mua_photo',
-            ])
-            ->orderByDesc('b.created_at');
-    
-        if ($status) {
-            $statuses = is_array($status) ? $status : array_map('trim', explode(',', $status));
-            $q->whereIn('b.status', $statuses);
+        try {
+            $perPage = min((int) $request->query('per_page', 10), 100);
+            $status  = $request->query('status');
+
+            $q = DB::table('bookings as b')
+                ->join('profiles as mp', 'mp.id', '=', 'b.mua_id')
+                ->leftJoin('offerings as o', 'o.id', '=', 'b.offering_id')
+                ->where('b.customer_id', $userId)
+                ->select([
+                    'b.id',
+                    'b.booking_date',
+                    'b.booking_time',
+                    'b.status',
+                    'b.payment_status',
+                    'b.grand_total',
+                    'b.invoice_number',
+                    'o.name_offer',
+                    'o.price as offering_price',
+                    'mp.name as mua_name',
+                    'mp.photo_url as mua_photo',
+                ])
+                ->orderByDesc('b.created_at');
+
+            if ($status) {
+                $statuses = is_array($status) ? $status : array_map('trim', explode(',', $status));
+                $q->whereIn('b.status', $statuses);
+            }
+
+            $pg = $q->paginate($perPage);
+
+            Log::channel('bookings')->info('GET_USER_BOOKINGS_SUCCESS', $ctx + [
+                'count'   => $pg->count(),
+                'perPage' => $perPage,
+                'page'    => $pg->currentPage(),
+            ]);
+
+            return response()->json($pg);
+        } catch (\Throwable $e) {
+            Log::channel('bookings')->error('GET_USER_BOOKINGS_ERROR', $ctx + [
+                'error' => $e->getMessage(),
+            ]);
+            return response()->json(['message' => 'Failed to fetch user bookings'], 500);
         }
-
-    
-        return response()->json($q->paginate($perPage));
     }
 }
