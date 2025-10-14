@@ -76,7 +76,7 @@ class AuthController extends Controller
             'phone'         => ['nullable','string','max:30'],
             'bio'           => ['nullable','string','max:1000'],
             'address'       => ['nullable','string','max:255'],
-            'services'      => ['nullable'], // array atau string CSV
+            'services'      => ['nullable'],  
             'services.*'    => ['sometimes','string','max:100'],
             'location_lat'  => ['nullable','numeric','between:-90,90'],
             'location_lng'  => ['nullable','numeric','between:-180,180'],

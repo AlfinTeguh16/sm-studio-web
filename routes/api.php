@@ -49,6 +49,7 @@ Route::middleware('auth:sanctum')->group(function () {
         // Route::patch('/password',       [AuthController::class, 'changeProfile']);
     });
  // --- MUA ---
+    Route::get(   '/mua',                [MuaController::class, 'index']);
     Route::get('/mua/{muaId}', [MuaController::class, 'getMuaProfile']);
     Route::get(   '/mua-location',                [MuaController::class, 'getMuaLocation']);
   

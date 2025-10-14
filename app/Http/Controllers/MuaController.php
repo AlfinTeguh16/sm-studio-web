@@ -4,11 +4,22 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use App\Http\Requests;
-use App\Http\Controllers\Controller;     
+use App\Http\Controllers\Controller;   
+use Illuminate\Support\Facades\DB;  
 use App\Models\Profile;
 
 class MuaController extends Controller
 {
+
+    public function index()
+    {
+        $muas = DB::table('profiles')
+            ->where('role', 'mua')
+            ->orderBy('name')
+            ->paginate(20);
+
+        return response()->json($muas);
+    }
     public function getMuaLocation (Request $req)
     {
         $location = Profile::select('id', 'name', 'location_lat', 'location_lng', 'address', 'photo_url')
