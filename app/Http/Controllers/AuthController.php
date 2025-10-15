@@ -14,6 +14,8 @@ use Illuminate\Validation\Rules\File as FileRule;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\URL;
+
 
 class AuthController extends Controller
 {
@@ -32,9 +34,14 @@ class AuthController extends Controller
                 if ($file && $file->isValid()) {
                     // Simpan ke storage/app/public/profile_photos/xxxx.ext
                     $path = $file->store('profile_photos', 'public');
+    
+                    // URL absolut, contoh: https://domain.com/storage/profile_photos/xxx.jpg
+                    $public = Storage::url($path);           // /storage/profile_photos/xxx.jpg
+                    $absolute = URL::to($public);            // https://domain.com/storage/profile_photos/xxx.jpg
+    
                     return [
-                        'path' => $path,               // profile_photos/xxx.jpg
-                        'url'  => Storage::url($path), // /storage/profile_photos/xxx.jpg
+                        'path' => $path,
+                        'url'  => $absolute,
                     ];
                 }
             }
@@ -76,8 +83,10 @@ class AuthController extends Controller
             'phone'         => ['nullable','string','max:30'],
             'bio'           => ['nullable','string','max:1000'],
             'address'       => ['nullable','string','max:255'],
-            'services'      => ['nullable'],  
+            'services'      => ['nullable'],  // array atau CSV string
             'services.*'    => ['sometimes','string','max:100'],
+
+            // GPS (boleh untuk semua role saat ini untuk testing)
             'location_lat'  => ['nullable','numeric','between:-90,90'],
             'location_lng'  => ['nullable','numeric','between:-180,180'],
 
@@ -88,9 +97,19 @@ class AuthController extends Controller
             'remove_photo'  => ['nullable','boolean'],
         ]);
 
-        $user = $request->user();
+        // Normalisasi: string kosong → null (agar bisa clear field)
+        foreach (['name','phone','bio','address'] as $f) {
+            if (array_key_exists($f, $data)) {
+                $val = $data[$f];
+                if (is_string($val)) {
+                    $val = trim($val);
+                    if ($val === '') $val = null;
+                }
+                $data[$f] = $val;
+            }
+        }
 
-        // Normalisasi services: string CSV -> array, array -> trimmed
+        // Normalisasi services
         if (array_key_exists('services', $data) && $data['services'] !== null) {
             if (is_string($data['services'])) {
                 $items = array_filter(array_map('trim', explode(',', $data['services'])));
@@ -105,28 +124,48 @@ class AuthController extends Controller
             }
         }
 
+        $user = $request->user();
+
         $result = DB::transaction(function () use ($data, $user, $request) {
 
-            // Sinkron nama user jika diisi
+            // Sinkron nama user (hanya jika diberikan & bukan null)
             if (array_key_exists('name', $data) && $data['name'] !== null) {
                 $user->name = $data['name'];
                 $user->save();
             }
 
-            // Ambil/buat profile (PK = users.id)
+            // Ambil/buat profil (PK = users.id)
             $profile = Profile::firstOrNew(['id' => $user->id]);
             if (!$profile->exists && empty($profile->role)) {
                 $profile->role = 'customer';
             }
 
+            // Sinkron nama ke profiles.name (boleh null untuk clear)
+            if (array_key_exists('name', $data)) {
+                $profile->name = $data['name'];
+            }
+
             // Isi field sederhana
-            foreach (['phone','bio','address','location_lat','location_lng'] as $f) {
+            foreach (['phone','bio','address'] as $f) {
                 if (array_key_exists($f, $data)) {
                     $profile->{$f} = $data[$f];
                 }
             }
+
+            // === GPS ===
+            // SAAT INI: izinkan SEMUA role untuk testing (customer & MUA)
+            // NANTI jika ingin batasi hanya MUA: uncomment baris role check di bawah
+            // if ($profile->role !== 'mua') { unset($data['location_lat'], $data['location_lng']); }
+            foreach (['location_lat','location_lng'] as $f) {
+                if (array_key_exists($f, $data)) {
+                    // null -> clear; number -> simpan
+                    $profile->{$f} = $data[$f];
+                }
+            }
+
+            // Services (cast json)
             if (array_key_exists('services', $data)) {
-                $profile->services = $data['services']; // diasumsikan cast json di model
+                $profile->services = $data['services'];
             }
 
             // Hapus foto lama bila diminta
@@ -139,11 +178,10 @@ class AuthController extends Controller
             // Upload foto baru jika ada (terima photo_url atau photo)
             $saved = $this->saveProfileImage($request, ['photo_url','photo']);
             if ($saved) {
-                // bersihkan foto lama kalau ada
                 if (!empty($profile->photo_url)) {
                     $this->deleteOldPhotoIfOwned($profile->photo_url);
                 }
-                $profile->photo_url = $saved['url']; // set URL publik untuk dipakai klien
+                $profile->photo_url = $saved['url']; // URL absolut utk klien RN
                 Log::info('PROFILE_PHOTO_UPLOADED', [
                     'user_id' => $user->id,
                     'path'    => $saved['path'],
@@ -164,9 +202,12 @@ class AuthController extends Controller
 
         return response()->json([
             'message' => 'Profile updated successfully',
-            'data'    => $result,
+            'data'    => $result,           // { user, profile }
+            'user'    => $result['user'],   // shortcut
+            'profile' => $result['profile'] // shortcut
         ]);
     }
+
 
     /**
      * POST /auth/register
