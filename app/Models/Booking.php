@@ -47,7 +47,8 @@ class Booking extends Model
 
     public function mua()
     {
-        return $this->belongsTo(Profile::class, 'mua_id', 'id');
+        return $this->belongsTo(Profile::class, 'mua_id', 'id')
+                    ->select(['id','name','photo_url']);
     }
 
     public function offering()
