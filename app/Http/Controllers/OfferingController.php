@@ -159,22 +159,52 @@ class OfferingController extends Controller
     /**
      * GET /offerings/{offering}
      */
-    public function show(Request $req, Offering $offering)
+    public function show(Request $req, $offeringId)
     {
-        $t0  = microtime(true);
-        $ctx = $this->baseCtx($req) + ['offeringId' => $offering->id];
-        Log::channel('offerings')->info('OFFERINGS_SHOW_ATTEMPT', $ctx);
+        $t0 = microtime(true);
+        $with = $req->query('include'); // e.g. ?include=mua
 
         try {
-            $res = response()->json($offering);
-            Log::channel('offerings')->info('OFFERINGS_SHOW_SUCCESS', $ctx + [
-                'ms' => (int) ((microtime(true) - $t0)*1000)
+            // Jika user minta include relasi, pakai eager load (opsi “B” sebagai fallback),
+            // sekaligus tetap flatten 'mua_name' & 'mua_photo' agar FE bisa langsung pakai.
+            if ($with === 'mua' || $req->boolean('include_mua')) {
+                $off = Offering::with(['mua'])->findOrFail($offeringId);
+
+                // flatten agar konsisten dengan Opsi A
+                $off->setAttribute('mua_name', optional($off->mua)->name);
+                $off->setAttribute('mua_photo', optional($off->mua)->photo_url);
+
+                Log::channel('offerings')->info('OFFERING_SHOW_WITH_REL', [
+                    'offering_id' => $offeringId,
+                    'ms' => (int)((microtime(true)-$t0)*1000),
+                ]);
+
+                return response()->json(['data' => $off], 200);
+            }
+
+            // Default: Opsi A (LEFT JOIN ke profiles) untuk dapat 'mua_name' & 'mua_photo'
+            $row = Offering::query()
+                ->leftJoin('profiles as p', 'p.id', '=', 'offerings.mua_id')
+                ->where('offerings.id', $offeringId)
+                ->select([
+                    'offerings.*',
+                    'p.name as mua_name',
+                    'p.photo_url as mua_photo',
+                ])
+                ->firstOrFail();
+
+            Log::channel('offerings')->info('OFFERING_SHOW', [
+                'offering_id' => $offeringId,
+                'ms' => (int)((microtime(true)-$t0)*1000),
             ]);
-            return $res;
+
+            return response()->json(['data' => $row], 200);
+
         } catch (Throwable $e) {
-            Log::channel('offerings')->error('OFFERINGS_SHOW_ERROR', $ctx + [
+            Log::channel('offerings')->error('OFFERING_SHOW_ERROR', [
+                'offering_id' => $offeringId,
                 'error' => $e->getMessage(),
-                'ms'    => (int) ((microtime(true) - $t0)*1000),
+                'ms' => (int)((microtime(true)-$t0)*1000),
             ]);
             throw $e;
         }
