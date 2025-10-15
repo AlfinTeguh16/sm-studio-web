@@ -51,72 +51,110 @@ class OfferingController extends Controller
     {
         $t0  = microtime(true);
         $ctx = $this->baseCtx($req);
+
         Log::channel('offerings')->info('OFFERINGS_INDEX_ATTEMPT', $ctx + [
             'query' => [
-                'muaId'           => $req->query('muaId'),
-                'makeup_type'     => $req->query('makeup_type'),
-                'person_min'      => $req->query('person_min'),
-                'person_max'      => $req->query('person_max'),
-                'price_min'       => $req->query('price_min'),
-                'price_max'       => $req->query('price_max'),
+                'muaId'            => $req->query('muaId'),
+                'makeup_type'      => $req->query('makeup_type'),
+                'person_min'       => $req->query('person_min'),
+                'person_max'       => $req->query('person_max'),
+                'price_min'        => $req->query('price_min'),
+                'price_max'        => $req->query('price_max'),
                 'has_collaboration'=> $req->query('has_collaboration'),
-                'q'               => $this->brief($req->query('q')),
-                'per_page'        => $req->query('per_page'),
-                'sort'            => $req->query('sort'),
-                'dir'             => $req->query('dir'),
+                'q'                => $this->brief($req->query('q')),
+                'per_page'         => $req->query('per_page'),
+                'sort'             => $req->query('sort'),
+                'dir'              => $req->query('dir'),
             ],
         ]);
 
         try {
+            // --- Paging & sorting guard ---
             $per = (int) $req->query('per_page', 20);
             $per = max(1, min(100, $per));
 
             $sort = $req->query('sort', 'created_at');
-            $dir  = $req->query('dir', 'desc');
-            if (!in_array($sort, ['created_at','price'], true)) $sort = 'created_at';
-            if (!in_array(strtolower($dir), ['asc','desc'], true)) $dir = 'desc';
+            $dir  = strtolower($req->query('dir', 'desc'));
+            if (!in_array($sort, ['created_at','price'], true)) {
+                $sort = 'created_at';
+            }
+            if (!in_array($dir, ['asc','desc'], true)) {
+                $dir = 'desc';
+            }
 
-            $q = Offering::query();
+            // --- Base query: JOIN profiles + select alias ---
+            $q = Offering::query()
+                ->leftJoin('profiles as p', 'p.id', '=', 'offerings.mua_id')
+                ->select([
+                    'offerings.*',
+                    'p.name as mua_name',
+                    'p.photo_url as mua_photo',
+                ]);
 
-            if ($req->filled('muaId'))       $q->where('mua_id', $req->query('muaId'));
-            if ($req->filled('makeup_type')) $q->where('makeup_type', $req->query('makeup_type'));
+            // --- Filters ---
+            if ($req->filled('muaId')) {
+                $q->where('offerings.mua_id', $req->query('muaId'));
+            }
+            if ($req->filled('makeup_type')) {
+                $q->where('offerings.makeup_type', $req->query('makeup_type'));
+            }
 
-            if ($req->filled('person_min'))  $q->where('person', '>=', (int)$req->query('person_min'));
-            if ($req->filled('person_max'))  $q->where('person', '<=', (int)$req->query('person_max'));
+            if ($req->filled('person_min')) {
+                $q->where('offerings.person', '>=', (int) $req->query('person_min'));
+            }
+            if ($req->filled('person_max')) {
+                $q->where('offerings.person', '<=', (int) $req->query('person_max'));
+            }
 
-            if ($req->filled('price_min'))   $q->where('price', '>=', (float)$req->query('price_min'));
-            if ($req->filled('price_max'))   $q->where('price', '<=', (float)$req->query('price_max'));
+            if ($req->filled('price_min')) {
+                $q->where('offerings.price', '>=', (float) $req->query('price_min'));
+            }
+            if ($req->filled('price_max')) {
+                $q->where('offerings.price', '<=', (float) $req->query('price_max'));
+            }
 
             if ($req->has('has_collaboration')) {
                 $flag = filter_var($req->query('has_collaboration'), FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
-                if ($flag === true)  $q->whereNotNull('collaboration')->whereNotNull('collaboration_price');
-                if ($flag === false) $q->whereNull('collaboration')->whereNull('collaboration_price');
+                if ($flag === true) {
+                    $q->whereNotNull('offerings.collaboration')
+                    ->whereNotNull('offerings.collaboration_price');
+                } elseif ($flag === false) {
+                    $q->whereNull('offerings.collaboration')
+                    ->whereNull('offerings.collaboration_price');
+                }
             }
 
             if ($req->filled('q')) {
                 $kw = '%'.$req->query('q').'%';
                 $q->where(function ($qq) use ($kw) {
-                    $qq->where('name_offer','like',$kw)->orWhere('collaboration','like',$kw);
+                    $qq->where('offerings.name_offer', 'like', $kw)
+                    ->orWhere('offerings.collaboration', 'like', $kw)
+                    ->orWhere('p.name', 'like', $kw); // cari di nama MUA
                 });
             }
 
-            $data = $q->orderBy($sort, $dir)->paginate($per);
+            // --- Order & paginate ---
+            $data = $q->orderBy('offerings.'.$sort, $dir)->paginate($per);
 
             Log::channel('offerings')->info('OFFERINGS_INDEX_SUCCESS', $ctx + [
                 'count'   => $data->count(),
                 'perPage' => $data->perPage(),
                 'page'    => $data->currentPage(),
-                'ms'      => (int) ((microtime(true) - $t0)*1000),
+                'ms'      => (int) ((microtime(true) - $t0) * 1000),
             ]);
+
+            // Catatan: hasil JSON tiap item akan punya 'mua_name' & 'mua_photo'
             return response()->json($data);
+
         } catch (Throwable $e) {
             Log::channel('offerings')->error('OFFERINGS_INDEX_ERROR', $ctx + [
                 'error' => $e->getMessage(),
-                'ms'    => (int) ((microtime(true) - $t0)*1000),
+                'ms'    => (int) ((microtime(true) - $t0) * 1000),
             ]);
             throw $e;
         }
     }
+
 
     /**
      * GET /offerings/{offering}

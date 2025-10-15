@@ -15,5 +15,11 @@ class Offering extends Model {
         'price'          => 'float',
         'collaboration_price' => 'float',
       ];
+
+      public function mua()
+      {
+          return $this->belongsTo(Profile::class, 'mua_id', 'id')
+                      ->select(['id','name','photo_url']);
+      }
       
  }
