@@ -17,4 +17,16 @@ class Profile extends Model {
 
     public function offerings(): HasMany { return $this->hasMany(Offering::class, 'mua_id'); }
     public function portfolios(): HasMany { return $this->hasMany(Portfolio::class, 'mua_id'); }
+
+    public function collaborations()
+    {
+        return $this->belongsToMany(
+            Booking::class,
+            'booking_collaborators',
+            'profile_id',
+            'booking_id'
+        )->withPivot(['role','status','share_amount','share_percent','invited_at','responded_at'])
+        ->withTimestamps();
+    }
+
 }

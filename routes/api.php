@@ -7,7 +7,8 @@ use App\Http\Controllers\{
     OfferingController,
     PortfolioController,
     NotificationController,
-    MuaController
+    MuaController,
+    BookingCollaboratorController
 };
 
 /*
@@ -122,6 +123,12 @@ Route::middleware('auth:sanctum')->group(function () {
     // DELETE
     Route::delete('/notifications/{notification}', [NotificationController::class, 'destroy']);
     Route::delete('/notifications',             [NotificationController::class, 'destroyAll']); // mass delete (default: only read)
+
+    // --- Booking Colaborator ---
+    Route::get('bookings/{booking}/collaborators', [BookingCollaboratorController::class, 'index']);
+    Route::post('bookings/{booking}/collaborators', [BookingCollaboratorController::class, 'invite']);
+    Route::delete('bookings/{booking}/collaborators/{profile}', [BookingCollaboratorController::class, 'remove']);
+    Route::post('bookings/{booking}/collaborators/respond', [BookingCollaboratorController::class, 'respondInvite']);
 
    
 

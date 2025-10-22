@@ -37,6 +37,7 @@ class Booking extends Model
         'discount_amount'   => 'decimal:2',
         'grand_total'       => 'decimal:2',
         'use_collaboration' => 'boolean',
+        'is_collaborative' => 'boolean',
     ];
 
     /* ========= RELATIONS (opsional, aman) ========= */
@@ -173,5 +174,29 @@ class Booking extends Model
     public function scopeUnpaid($q)
     {
         return $q->where('payment_status', 'unpaid');
+    }
+
+
+    public function collaborators()
+    {
+        return $this->belongsToMany(
+            Profile::class,
+            'booking_collaborators',
+            'booking_id',
+            'profile_id'
+        )->withPivot(['role','status','share_amount','share_percent','invited_at','responded_at'])
+        ->withTimestamps();
+    }
+
+    public function acceptedCollaborators()
+    {
+        return $this->belongsToMany(
+            Profile::class,
+            'booking_collaborators',
+            'booking_id',
+            'profile_id'
+        )->withPivot(['role','status'])
+        ->wherePivot('status', 'accepted')
+        ->withTimestamps();
     }
 }
