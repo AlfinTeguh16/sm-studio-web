@@ -5,7 +5,8 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use App\Models\Notification as AppNotification; 
+use Illuminate\Support\Facades\Schema; // opsional: kalau mau cek struktur tabel (tidak dipakai di contoh)
+use App\Models\Notification as AppNotification;
 use Illuminate\Support\Str;
 use App\Models\Booking;
 use App\Models\Profile;
@@ -67,7 +68,6 @@ class BookingCollaboratorController extends Controller
         }
 
         // 2) Buat notifikasi per user (menggunakan model App\Models\Notification)
-        // Kumpulkan hasil untuk response debugging
         $createdNotifications = [];
 
         // Siapkan data inviter
@@ -100,22 +100,74 @@ class BookingCollaboratorController extends Controller
             );
 
             try {
+                Log::info("Invite: attempting to create notification", ['profile_id' => $profileId, 'user_id' => $targetUserId]);
+
                 $notif = AppNotification::create([
                     'user_id' => $targetUserId,
                     'title' => $title,
                     'message' => $message,
-                    'type' => 'booking_invite', // custom type, bisa kamu ganti
+                    'type' => 'booking_invite',
                     'is_read' => false,
                 ]);
 
+                if (! $notif) {
+                    Log::error("Invite: create() returned falsy for profile {$profileId} / user {$targetUserId}");
+                    // coba fallback langsung ke DB
+                    $id = DB::table('notifications')->insertGetId([
+                        'user_id' => $targetUserId,
+                        'title' => $title,
+                        'message' => $message,
+                        'type' => 'booking_invite',
+                        'is_read' => 0,
+                        'created_at' => now(),
+                        'updated_at' => now(),
+                    ]);
+                    $createdNotifications[] = [
+                        'profile_id' => $profileId,
+                        'user_id' => $targetUserId,
+                        'notification_id' => $id,
+                    ];
+                    Log::info("Invite: fallback DB insert succeeded", ['id' => $id, 'profile_id' => $profileId]);
+                    continue;
+                }
+
+                Log::info("Invite: notification created", ['profile_id' => $profileId, 'notif_id' => $notif->id]);
                 $createdNotifications[] = [
                     'profile_id' => $profileId,
                     'user_id' => $targetUserId,
                     'notification_id' => $notif->id ?? null,
                 ];
             } catch (\Throwable $ex) {
-                Log::error("Invite: failed to insert notification for profile {$profileId}: " . $ex->getMessage());
-                // lanjutkan ke profile selanjutnya
+                // log pesan & trace lengkap supaya kelihatan kenapa gagal
+                Log::error("Invite: failed to insert notification for profile {$profileId}: {$ex->getMessage()}", [
+                    'exception' => $ex,
+                    'profile_id' => $profileId,
+                    'user_id' => $targetUserId,
+                ]);
+
+                // optional: coba fallback DB insert untuk memastikan data tercatat
+                try {
+                    $id = DB::table('notifications')->insertGetId([
+                        'user_id' => $targetUserId,
+                        'title' => $title,
+                        'message' => $message,
+                        'type' => 'booking_invite',
+                        'is_read' => 0,
+                        'created_at' => now(),
+                        'updated_at' => now(),
+                    ]);
+                    $createdNotifications[] = [
+                        'profile_id' => $profileId,
+                        'user_id' => $targetUserId,
+                        'notification_id' => $id,
+                    ];
+                    Log::info("Invite: fallback DB insert succeeded after exception", ['id' => $id, 'profile_id' => $profileId]);
+                } catch (\Throwable $ex2) {
+                    Log::error("Invite: fallback DB insert ALSO failed for profile {$profileId}: {$ex2->getMessage()}", [
+                        'exception2' => $ex2
+                    ]);
+                    // lanjutkan ke profile selanjutnya
+                }
             }
         }
 
