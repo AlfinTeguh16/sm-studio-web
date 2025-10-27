@@ -76,21 +76,15 @@ class BookingCollaboratorController extends Controller
         $invoiceLabel = $booking->invoice_number ? $booking->invoice_number : ("#" . $booking->id);
 
         foreach ($processedProfileIds as $profileId) {
-            // ambil profil dan user_id target
             $profile = Profile::find($profileId);
             if (! $profile) {
                 Log::warning("Invite: Profile not found while creating notification: {$profileId}");
                 continue;
             }
-
-            // cari user id terkait — sesuaikan field jika di modelmu beda
-            $targetUserId = $profile->user_id ?? optional($profile->user)->id ?? null;
-            if (! $targetUserId) {
-                Log::warning("Invite: Profile {$profileId} has no linked user_id; skipping notification insert.");
-                continue;
-            }
-
-            // buat title & message yang bisa ditampilkan di FE
+        
+            // karena notifications.user_id -> FK ke profiles(id), gunakan profile->id
+            $targetProfileId = $profile->id;
+        
             $title = "Undangan Kolaborasi Booking";
             $message = sprintf(
                 "%s mengundang Anda sebagai %s pada booking %s",
@@ -98,78 +92,60 @@ class BookingCollaboratorController extends Controller
                 $role,
                 $invoiceLabel
             );
-
+        
             try {
-                Log::info("Invite: attempting to create notification", ['profile_id' => $profileId, 'user_id' => $targetUserId]);
-
+                Log::info("Invite: creating notification for profile", [
+                    'profile_id' => $profileId,
+                    'target_profile_id' => $targetProfileId
+                ]);
+        
+                // NOTE: type harus salah satu dari: booking/system/payment (ganti dari 'booking_invite')
                 $notif = AppNotification::create([
-                    'user_id' => $targetUserId,
-                    'title' => $title,
+                    'user_id' => $targetProfileId,   // <-- ini adalah profiles.id sesuai FK di DB
+                    'title'   => $title,
                     'message' => $message,
-                    'type' => 'booking_invite',
+                    'type'    => 'booking',
                     'is_read' => false,
                 ]);
-
-                if (! $notif) {
-                    Log::error("Invite: create() returned falsy for profile {$profileId} / user {$targetUserId}");
-                    // coba fallback langsung ke DB
-                    $id = DB::table('notifications')->insertGetId([
-                        'user_id' => $targetUserId,
-                        'title' => $title,
-                        'message' => $message,
-                        'type' => 'booking_invite',
-                        'is_read' => 0,
-                        'created_at' => now(),
-                        'updated_at' => now(),
-                    ]);
-                    $createdNotifications[] = [
-                        'profile_id' => $profileId,
-                        'user_id' => $targetUserId,
-                        'notification_id' => $id,
-                    ];
-                    Log::info("Invite: fallback DB insert succeeded", ['id' => $id, 'profile_id' => $profileId]);
-                    continue;
-                }
-
-                Log::info("Invite: notification created", ['profile_id' => $profileId, 'notif_id' => $notif->id]);
+        
                 $createdNotifications[] = [
-                    'profile_id' => $profileId,
-                    'user_id' => $targetUserId,
+                    'profile_id'      => $profileId,
+                    'user_id'         => $targetProfileId, // tetap bernama 'user_id' di tabel, tapi isinya profile_id
                     'notification_id' => $notif->id ?? null,
                 ];
             } catch (\Throwable $ex) {
-                // log pesan & trace lengkap supaya kelihatan kenapa gagal
                 Log::error("Invite: failed to insert notification for profile {$profileId}: {$ex->getMessage()}", [
                     'exception' => $ex,
                     'profile_id' => $profileId,
-                    'user_id' => $targetUserId,
+                    'target_profile_id' => $targetProfileId,
                 ]);
-
-                // optional: coba fallback DB insert untuk memastikan data tercatat
+        
+                // fallback raw DB (skema yang sama)
                 try {
                     $id = DB::table('notifications')->insertGetId([
-                        'user_id' => $targetUserId,
-                        'title' => $title,
-                        'message' => $message,
-                        'type' => 'booking_invite',
-                        'is_read' => 0,
+                        'user_id'    => $targetProfileId,
+                        'title'      => $title,
+                        'message'    => $message,
+                        'type'       => 'booking',   // <-- penting
+                        'is_read'    => 0,
                         'created_at' => now(),
                         'updated_at' => now(),
                     ]);
+        
                     $createdNotifications[] = [
-                        'profile_id' => $profileId,
-                        'user_id' => $targetUserId,
+                        'profile_id'      => $profileId,
+                        'user_id'         => $targetProfileId,
                         'notification_id' => $id,
                     ];
-                    Log::info("Invite: fallback DB insert succeeded after exception", ['id' => $id, 'profile_id' => $profileId]);
+                    Log::info("Invite: fallback DB insert succeeded", ['id' => $id, 'profile_id' => $profileId]);
                 } catch (\Throwable $ex2) {
                     Log::error("Invite: fallback DB insert ALSO failed for profile {$profileId}: {$ex2->getMessage()}", [
                         'exception2' => $ex2
                     ]);
-                    // lanjutkan ke profile selanjutnya
                 }
             }
         }
+        
 
         return response()->json([
             'message' => 'Invited',
