@@ -4,9 +4,11 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use App\Models\Notification as AppNotification; 
+use Illuminate\Support\Str;
 use App\Models\Booking;
 use App\Models\Profile;
-use App\Models\BookingCollaborator;
 
 class BookingCollaboratorController extends Controller
 {
@@ -31,28 +33,98 @@ class BookingCollaboratorController extends Controller
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
-        DB::transaction(function() use ($booking, $payload) {
+        $role = $payload['role'] ?? 'assistant';
+        $processedProfileIds = [];
+
+        // 1) update/insert booking_collaborators in a transaction
+        DB::transaction(function() use ($booking, $payload, $role, &$processedProfileIds) {
             foreach ($payload['profile_ids'] as $profileId) {
-                if ($profileId === (string) $booking->mua_id) continue; // skip lead
+                // skip lead sendiri
+                if ($profileId === (string) $booking->mua_id) continue;
 
                 DB::table('booking_collaborators')->updateOrInsert(
                     ['booking_id' => $booking->id, 'profile_id' => $profileId],
                     [
-                        'role' => $payload['role'] ?? 'assistant',
+                        'role' => $role,
                         'status' => 'invited',
                         'invited_at' => now(),
                         'updated_at' => now(),
-                        'created_at' => now()
+                        'created_at' => now(),
                     ]
                 );
 
-                // TODO: push Notification job -> CollaboratorInvited
+                $processedProfileIds[] = $profileId;
             }
 
-            $booking->update(['is_collaborative' => true]);
+            // tandai booking collaborative jika belum
+            if (! $booking->is_collaborative) {
+                $booking->update(['is_collaborative' => true]);
+            }
         });
 
-        return response()->json(['message' => 'Invited'], 200);
+        if (empty($processedProfileIds)) {
+            return response()->json(['message' => 'No valid profiles to invite'], 200);
+        }
+
+        // 2) Buat notifikasi per user (menggunakan model App\Models\Notification)
+        // Kumpulkan hasil untuk response debugging
+        $createdNotifications = [];
+
+        // Siapkan data inviter
+        $inviterProfile = optional($req->user())->profile;
+        $inviterName = $inviterProfile->name ?? optional($req->user())->name ?? 'MUA';
+        $invoiceLabel = $booking->invoice_number ? $booking->invoice_number : ("#" . $booking->id);
+
+        foreach ($processedProfileIds as $profileId) {
+            // ambil profil dan user_id target
+            $profile = Profile::find($profileId);
+            if (! $profile) {
+                Log::warning("Invite: Profile not found while creating notification: {$profileId}");
+                continue;
+            }
+
+            // cari user id terkait — sesuaikan field jika di modelmu beda
+            $targetUserId = $profile->user_id ?? optional($profile->user)->id ?? null;
+            if (! $targetUserId) {
+                Log::warning("Invite: Profile {$profileId} has no linked user_id; skipping notification insert.");
+                continue;
+            }
+
+            // buat title & message yang bisa ditampilkan di FE
+            $title = "Undangan Kolaborasi Booking";
+            $message = sprintf(
+                "%s mengundang Anda sebagai %s pada booking %s",
+                $inviterName,
+                $role,
+                $invoiceLabel
+            );
+
+            try {
+                $notif = AppNotification::create([
+                    'user_id' => $targetUserId,
+                    'title' => $title,
+                    'message' => $message,
+                    'type' => 'booking_invite', // custom type, bisa kamu ganti
+                    'is_read' => false,
+                ]);
+
+                $createdNotifications[] = [
+                    'profile_id' => $profileId,
+                    'user_id' => $targetUserId,
+                    'notification_id' => $notif->id ?? null,
+                ];
+            } catch (\Throwable $ex) {
+                Log::error("Invite: failed to insert notification for profile {$profileId}: " . $ex->getMessage());
+                // lanjutkan ke profile selanjutnya
+            }
+        }
+
+        return response()->json([
+            'message' => 'Invited',
+            'invited_count' => count($processedProfileIds),
+            'invited_ids' => $processedProfileIds,
+            'notifications' => $createdNotifications,
+        ], 200);
     }
 
     public function remove(Request $req, $bookingId, $profileId)
